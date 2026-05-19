@@ -260,7 +260,7 @@ export default function ReportDashboard() {
             {/* Competitor SAV bars - derived from prompt data */}
             {[
               { label: project.brand_name || 'You', pct: Math.min(95, Math.round(run.geo_score || 28)), highlight: true },
-              ...(JSON.parse(project.competitors || '[]')).slice(0,4).map((c, i) => ({
+              ...(Array.isArray(project.competitors) ? project.competitors : (() => { try { return JSON.parse(project.competitors || '[]') } catch { return [] } })()).slice(0,4).map((c, i) => ({
                 label: c,
                 pct: Math.max(5, Math.round(35 - i * 7 + Math.random() * 8)),
                 highlight: false
