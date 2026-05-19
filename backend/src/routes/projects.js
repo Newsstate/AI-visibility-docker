@@ -77,9 +77,9 @@ router.post('/', requireAuth, async (req, res) => {
     `, [
       req.user.userId, url, domain,
       analysis.brand_name, analysis.niche, analysis.target_audience,
-      JSON.stringify(analysis.services || []),
-      JSON.stringify(analysis.competitors || []),
-      JSON.stringify(analysis.geo_signals || []),
+JSON.stringify(Array.isArray(analysis.services) ? analysis.services : []),
+JSON.stringify(Array.isArray(analysis.competitors) ? analysis.competitors : []),
+JSON.stringify(Array.isArray(analysis.geo_signals) ? analysis.geo_signals : []),
       checkFrequency
     ]);
 
