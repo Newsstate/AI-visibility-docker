@@ -1,0 +1,65 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&family=DM+Mono:wght@400;500&display=swap');
+@import 'https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand: #7F77DD;
+  --brand-light: #EEEDFE;
+  --teal: #1D9E75;
+  --teal-light: #E1F5EE;
+  --amber: #EF9F27;
+  --amber-light: #FAEEDA;
+  --red: #E24B4A;
+  --red-light: #FCEBEB;
+  --blue: #378ADD;
+  --blue-light: #E6F1FB;
+}
+
+* { box-sizing: border-box; }
+body { font-family: 'DM Sans', system-ui, sans-serif; background: #F7F6F2; color: #1a1a19; }
+
+.rank-primary { background: #E1F5EE; color: #0F6E56; }
+.rank-top     { background: #E6F1FB; color: #185FA5; }
+.rank-mid     { background: #FAEEDA; color: #854F0B; }
+.rank-low     { background: #FCEBEB; color: #A32D2D; }
+.rank-absent  { background: #F1EFE8; color: #5F5E5A; }
+
+.card { @apply bg-white border border-gray-200 rounded-xl p-5; border-width: 0.5px; }
+.metric-card { @apply bg-gray-50 rounded-lg p-4; }
+
+.btn-primary {
+  @apply px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity;
+  background: #7F77DD;
+}
+.btn-primary:hover { opacity: 0.88; }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-ghost {
+  @apply px-4 py-2 rounded-lg text-sm font-medium transition-colors;
+  border: 0.5px solid #d1d0c8; color: #5f5e5a;
+}
+.btn-ghost:hover { background: #f1efe8; }
+
+input, textarea, select {
+  @apply w-full px-3 py-2 rounded-lg text-sm outline-none transition-all;
+  border: 0.5px solid #d1d0c8;
+  background: white;
+}
+input:focus, textarea:focus { border-color: #7F77DD; box-shadow: 0 0 0 3px rgba(127,119,221,0.1); }
+
+.section-label {
+  @apply text-xs font-medium tracking-widest uppercase mb-2;
+  color: #888780;
+}
+
+.pip { @apply rounded-sm; width: 10px; height: 10px; }
+.pip-on { background: #1D9E75; }
+.pip-off { background: #e8e6df; border: 0.5px solid #c8c6be; }
+
+@keyframes slideIn { from { width:0% } }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+@keyframes slideBar { 0%{width:0%;margin-left:0} 50%{width:60%} 100%{width:0%;margin-left:100%} }
