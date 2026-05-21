@@ -186,7 +186,8 @@ export default function AddWebsite() {
         selectedPlatforms, // ← sent to backend
       });
       toast.success('Checks launched!');
-      nav(`/checking/${data.checkRunId}?projectId=${data.project.id}`);
+      // Fixed — passes selected platforms in URL
+nav(`/checking/${data.checkRunId}?projectId=${data.project.id}&platforms=${selectedPlatforms.join(',')}`);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to launch');
       setLaunching(false);
