@@ -31,7 +31,7 @@ function calcGeoScore(platformScores) {
 
 // ─── Worker ──────────────────────────────────────────────────────
 export const checkWorker = new Worker('visibility-checks', async (job) => {
-  const { checkRunId, projectId } = job.data;
+const { checkRunId, projectId, selectedPlatforms } = job.data;
 
   await query(`UPDATE check_runs SET status='running', started_at=NOW() WHERE id=$1`, [checkRunId]);
 
@@ -40,7 +40,12 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
     `SELECT * FROM prompts WHERE project_id=$1 AND is_active=true`, [projectId]
   );
 
-  const totalQueries = prompts.length * PLATFORMS.length * RUNS_PER_PROMPT;
+ // Use selected platforms from job data, fall back to all platforms
+const activePlatforms = (selectedPlatforms && selectedPlatforms.length > 0)
+  ? PLATFORMS.filter(p => selectedPlatforms.includes(p))
+  : PLATFORMS;
+
+const totalQueries = prompts.length * activePlatforms.length * RUNS_PER_PROMPT;
   await query(`UPDATE check_runs SET total_queries=$1 WHERE id=$2`, [totalQueries, checkRunId]);
 
   let completedQueries = 0;
@@ -48,7 +53,7 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
 
   // ─── Prompt loop ─────────────────────────────────────────────
   for (const prompt of prompts) {
-    for (const platform of PLATFORMS) {
+  for (const platform of activePlatforms) {
       const runScores = [];
 
       // ─── Run loop (5 runs per prompt/platform) ──────────────
