@@ -58,16 +58,89 @@ function GeoScoreCircle({ score }) {
   );
 }
 
-function PlatformBar({ platform, score, tier }) {
+function PlatformBar({ platform, score, primaryCount, topCount, mentionedCount, buriedCount, absentCount, total }) {
   const meta = PLATFORM_META[platform] || { label: platform, color: '#888' };
+  const mentioned = total - absentCount;
+  const mentionedPct = Math.round((mentioned / Math.max(total, 1)) * 100);
+
+  // Tier segment widths as % of total prompts
+  const primaryPct   = Math.round((primaryCount   / Math.max(total,1)) * 100);
+  const topPct       = Math.round((topCount       / Math.max(total,1)) * 100);
+  const mentionedPct2= Math.round((mentionedCount / Math.max(total,1)) * 100);
+  const buriedPct    = Math.round((buriedCount    / Math.max(total,1)) * 100);
+  const absentPct    = 100 - primaryPct - topPct - mentionedPct2 - buriedPct;
+
+  // Overall tier label
+  const overallTier = primaryCount > 0 ? 'primary'
+    : topCount > 0 ? 'top'
+    : mentionedCount > 0 ? 'mentioned'
+    : buriedCount > 0 ? 'buried'
+    : 'absent';
+
   return (
-    <div className="flex items-center gap-2.5 py-2 border-b" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1'}}>
-      <span className="text-sm font-medium text-gray-800 w-28 flex-shrink-0">{meta.label}</span>
-      <div className="flex-1 rounded h-2 overflow-hidden" style={{background:'#f1efe8'}}>
-        <div className="h-full rounded transition-all duration-700" style={{width:`${Math.min(score,100)}%`,background:meta.color}} />
+    <div className="py-2.5 border-b" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1'}}>
+
+      {/* Row 1 — platform name + score + overall tier */}
+      <div className="flex items-center gap-2.5 mb-1.5">
+        <span className="text-xs font-medium text-gray-800 w-28 flex-shrink-0">{meta.label}</span>
+        <div className="flex-1" />
+        <span className="text-xs text-gray-400">{mentioned}/{total} prompts</span>
+        <span className="text-xs font-medium text-gray-800 w-6 text-right">{Math.round(score)}</span>
+        <RankBadge tier={overallTier} />
       </div>
-      <span className="text-sm font-medium text-gray-800 w-8 text-right flex-shrink-0">{Math.round(score)}</span>
-      <RankBadge tier={tier} />
+
+      {/* Row 2 — segmented tier bar */}
+      <div className="flex h-2 rounded-full overflow-hidden ml-[7.5rem]" style={{background:'#f1efe8'}}>
+        {primaryPct > 0 && (
+          <div style={{width:`${primaryPct}%`, background:'#1D9E75'}} title={`Primary: ${primaryCount}`} />
+        )}
+        {topPct > 0 && (
+          <div style={{width:`${topPct}%`, background:'#378ADD'}} title={`Top: ${topCount}`} />
+        )}
+        {mentionedPct2 > 0 && (
+          <div style={{width:`${mentionedPct2}%`, background:'#EF9F27'}} title={`Mentioned: ${mentionedCount}`} />
+        )}
+        {buriedPct > 0 && (
+          <div style={{width:`${buriedPct}%`, background:'#E24B4A'}} title={`Buried: ${buriedCount}`} />
+        )}
+        {absentPct > 0 && (
+          <div style={{width:`${absentPct}%`, background:'#D3D1C7'}} title={`Absent: ${absentCount}`} />
+        )}
+      </div>
+
+      {/* Row 3 — tier counts */}
+      <div className="flex items-center gap-2 mt-1 ml-[7.5rem]">
+        {primaryCount > 0 && (
+          <span className="text-[9px] flex items-center gap-0.5" style={{color:'#0F6E56'}}>
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{background:'#1D9E75'}} />
+            {primaryCount} primary
+          </span>
+        )}
+        {topCount > 0 && (
+          <span className="text-[9px] flex items-center gap-0.5" style={{color:'#185FA5'}}>
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{background:'#378ADD'}} />
+            {topCount} top
+          </span>
+        )}
+        {mentionedCount > 0 && (
+          <span className="text-[9px] flex items-center gap-0.5" style={{color:'#854F0B'}}>
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{background:'#EF9F27'}} />
+            {mentionedCount} mentioned
+          </span>
+        )}
+        {buriedCount > 0 && (
+          <span className="text-[9px] flex items-center gap-0.5" style={{color:'#A32D2D'}}>
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{background:'#E24B4A'}} />
+            {buriedCount} buried
+          </span>
+        )}
+        {absentCount > 0 && (
+          <span className="text-[9px] flex items-center gap-0.5" style={{color:'#888780'}}>
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{background:'#D3D1C7'}} />
+            {absentCount} absent
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -297,19 +370,36 @@ export default function ReportDashboard() {
         {/* Platform scores + Sentiment */}
         <div className="grid grid-cols-2 gap-4">
 
-          {/* LEFT — Platform visibility scores */}
+          {/* LEFT — Platform visibility scores with tier breakdown */}
           <div className="card">
-            <p className="section-label">Platform visibility scores</p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="section-label" style={{marginBottom:0}}>Platform visibility scores</p>
+              <div className="flex items-center gap-2">
+                {[
+                  {color:'#1D9E75',label:'Primary'},
+                  {color:'#378ADD',label:'Top'},
+                  {color:'#EF9F27',label:'Mentioned'},
+                  {color:'#E24B4A',label:'Buried'},
+                  {color:'#D3D1C7',label:'Absent'},
+                ].map(l => (
+                  <div key={l.label} className="flex items-center gap-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{background:l.color}} />
+                    <span className="text-[9px]" style={{color:'#b4b2a9'}}>{l.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
             {platformScores.map(ps => (
               <PlatformBar
                 key={ps.platform}
                 platform={ps.platform}
                 score={parseFloat(ps.avg_score) || 0}
-                tier={ps.best_rank_tier ||
-                  (parseFloat(ps.avg_score) >= 90 ? 'primary' :
-                   parseFloat(ps.avg_score) >= 65 ? 'top' :
-                   parseFloat(ps.avg_score) >= 30 ? 'mentioned' :
-                   parseFloat(ps.avg_score) >= 10 ? 'buried' : 'absent')}
+                primaryCount={parseInt(ps.primary_count) || 0}
+                topCount={parseInt(ps.top_count) || 0}
+                mentionedCount={parseInt(ps.mentioned_count) || 0}
+                buriedCount={parseInt(ps.buried_count) || 0}
+                absentCount={parseInt(ps.absent_count) || 0}
+                total={parseInt(ps.total) || 1}
               />
             ))}
           </div>
