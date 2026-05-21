@@ -38,6 +38,23 @@ router.post('/scan', requireAuth, async (req, res) => {
       'Access-Control-Allow-Origin': process.env.FRONTEND_URL
     });
 
+    // Scan simple (non-SSE fallback for browser EventSource auth limitation)
+router.get('/scan-simple', requireAuth, async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+
+  try {
+    const domain = getDomain(url);
+    const pages = await crawlWebsite(url);
+    const analysis = await analyzeWebsite(pages);
+    const prompts = await generatePrompts(analysis);
+    res.json({ analysis, prompts, domain });
+  } catch (err) {
+    console.error('Scan-simple error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
     const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
     send({ step: 'crawling', message: 'Crawling website pages...' });
