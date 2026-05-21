@@ -52,7 +52,7 @@ const { rows: promptResults } = await query(`
       'score',       ps.avg_rank_score,
       'consistency', ps.consistency_pct,
       'clicks',      ps.clicks,
-      'snippet',     (
+      'snippet', (
         SELECT pr.response_snippet
         FROM prompt_results pr
         WHERE pr.prompt_id = p.id
