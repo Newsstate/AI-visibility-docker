@@ -59,6 +59,27 @@ function PlatformBar({ platform, score, tier }) {
   );
 }
 
+// ─── SnippetText — highlights brand name in snippet ──────────────
+function SnippetText({ text, brand, domain }) {
+  if (!text) return null;
+  const terms = [brand, domain?.replace('www.', '')].filter(Boolean);
+  if (terms.length === 0) return <p className="text-xs text-gray-600 leading-relaxed">{text}</p>;
+
+  const regex = new RegExp(`(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+  const parts = text.split(regex);
+
+  return (
+    <p className="text-xs text-gray-600 leading-relaxed">
+      {parts.map((part, i) =>
+        regex.test(part)
+          ? <mark key={i} className="rounded px-0.5 font-medium"
+              style={{background:'#EEEDFE', color:'#3C3489'}}>{part}</mark>
+          : part
+      )}
+    </p>
+  );
+}
+
 export default function ReportDashboard() {
   const { projectId } = useParams();
   const nav = useNavigate();
@@ -66,6 +87,7 @@ export default function ReportDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
+  const [expandedPrompt, setExpandedPrompt] = useState(null);
   const clicksChartRef = useRef(null);
   const trendChartRef = useRef(null);
   const clicksChartInst = useRef(null);
@@ -320,74 +342,193 @@ export default function ReportDashboard() {
         </div>
 
         {/* Prompt analysis table */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <p className="section-label" style={{marginBottom:0}}>Prompt analysis</p>
-            <span className="text-xs text-gray-400">Consistency = out of 3 runs</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs" style={{borderCollapse:'collapse'}}>
-              <thead>
-                <tr>
-                  <th className="text-left pb-2 pr-3 font-medium uppercase tracking-wider text-gray-400" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'35%'}}>Prompt</th>
-                  <th className="pb-2 px-1 font-medium uppercase tracking-wider text-gray-400" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'5%'}}>Cat</th>
-                  {platforms.map(p => (
-                    <th key={p} className="pb-2 px-1 font-medium uppercase tracking-wider text-gray-400 text-center" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'9%'}}>
-                      {PLATFORM_META[p]?.label.slice(0,5)}
-                    </th>
-                  ))}
-                  <th className="pb-2 pl-2 font-medium uppercase tracking-wider text-gray-400" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'10%'}}>Consist.</th>
-                  <th className="pb-2 pl-2 font-medium uppercase tracking-wider text-gray-400 text-right" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'7%'}}>Clicks</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visiblePrompts.map(pr => {
-                  const cats = CAT_STYLES[pr.category] || {};
-                  const platData = pr.platforms || {};
-                  const platValues = Object.values(platData);
-                  // ─── Fix 7: safe avgConsistency — no divide by zero ────────
-                  const avgConsistency = platValues.length > 0
-                    ? platValues.reduce((s, v) => s + (parseFloat(v?.consistency) || 0), 0) / platValues.length
-                    : 0;
-                  const totalClicks = platValues.reduce((s, v) => s + (parseInt(v?.clicks) || 0), 0);
-                  return (
-                    <tr key={pr.id}>
-                      <td className="py-2 pr-3 text-gray-700" style={{borderBottomWidth:'0.5px',borderColor:'#f0ede6'}}>
-                        <span className="line-clamp-2 leading-relaxed">{pr.text}</span>
+      {/* PASTE THIS ENTIRE BLOCK to replace your existing "Prompt analysis table" card */}
+
+{/* Prompt analysis table with expandable response snippets */}
+<div className="card">
+  <div className="flex items-center justify-between mb-4">
+    <p className="section-label" style={{marginBottom:0}}>Prompt analysis</p>
+    <div className="flex items-center gap-3">
+      <span className="text-xs text-gray-400">Click any row to see AI responses</span>
+      <span className="text-xs text-gray-400">Consistency = out of 3 runs</span>
+    </div>
+  </div>
+  <div className="overflow-x-auto">
+    <table className="w-full text-xs" style={{borderCollapse:'collapse'}}>
+      <thead>
+        <tr>
+          <th className="text-left pb-2 pr-3 font-medium uppercase tracking-wider text-gray-400" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'35%'}}>Prompt</th>
+          <th className="pb-2 px-1 font-medium uppercase tracking-wider text-gray-400" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'5%'}}>Cat</th>
+          {platforms.map(p => (
+            <th key={p} className="pb-2 px-1 font-medium uppercase tracking-wider text-gray-400 text-center" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'9%'}}>
+              {PLATFORM_META[p]?.label.slice(0,5)}
+            </th>
+          ))}
+          <th className="pb-2 pl-2 font-medium uppercase tracking-wider text-gray-400" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'10%'}}>Consist.</th>
+          <th className="pb-2 pl-2 font-medium uppercase tracking-wider text-gray-400 text-right" style={{borderBottomWidth:'0.5px',borderColor:'#ebe9e1',width:'7%'}}>Clicks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {visiblePrompts.map(pr => {
+          const cats           = CAT_STYLES[pr.category] || {};
+          const platData       = pr.platforms || {};
+          const platValues     = Object.values(platData);
+          const avgConsistency = platValues.length > 0
+            ? platValues.reduce((s, v) => s + (parseFloat(v?.consistency) || 0), 0) / platValues.length
+            : 0;
+          const totalClicks    = platValues.reduce((s, v) => s + (parseInt(v?.clicks) || 0), 0);
+          const isExpanded     = expandedPrompt === pr.id;
+
+          // Collect snippets that exist for this prompt
+          const snippets = platforms
+            .map(plat => ({
+              platform: plat,
+              snippet:  platData[plat]?.snippet  || null,
+              sentiment:platData[plat]?.sentiment || 'neutral',
+              tier:     platData[plat]?.tier      || 'absent',
+            }))
+            .filter(s => s.snippet);
+
+          const hasSnippets = snippets.length > 0;
+
+          return (
+            <>
+              {/* ── Main prompt row ── */}
+              <tr key={pr.id}
+                onClick={() => setExpandedPrompt(isExpanded ? null : pr.id)}
+                style={{cursor: hasSnippets ? 'pointer' : 'default'}}
+                className={isExpanded ? '' : 'hover:bg-gray-50'}>
+
+                <td className="py-2 pr-3 text-gray-700" style={{borderBottomWidth: isExpanded ? '0' : '0.5px',borderColor:'#f0ede6'}}>
+                  <div className="flex items-start gap-1.5">
+                    {/* Expand indicator */}
+                    {hasSnippets && (
+                      <i className={`ti ${isExpanded ? 'ti-chevron-up' : 'ti-chevron-right'} text-[10px] mt-0.5 flex-shrink-0`}
+                        style={{color:'#b4b2a9'}} />
+                    )}
+                    <div>
+                      <span className="line-clamp-2 leading-relaxed">{pr.text}</span>
+                      <div className="flex items-center gap-1 mt-0.5">
                         {pr.source === 'manual' && (
-                          <span className="ml-1 text-[9px] font-medium px-1.5 py-0.5 rounded" style={{background:'#EEEDFE',color:'#3C3489'}}>manual</span>
+                          <span className="text-[9px] font-medium px-1.5 py-0.5 rounded" style={{background:'#EEEDFE',color:'#3C3489'}}>manual</span>
                         )}
-                      </td>
-                      <td className="py-2 px-1 text-center" style={{borderBottomWidth:'0.5px',borderColor:'#f0ede6'}}>
-                        {pr.category && (
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{background:cats.bg,color:cats.color}}>
-                            {CAT_LABELS[pr.category]}
+                        {hasSnippets && (
+                          <span className="text-[9px] text-gray-400 flex items-center gap-0.5">
+                            <i className="ti ti-message-circle text-[9px]" />{snippets.length} response{snippets.length > 1 ? 's' : ''}
                           </span>
                         )}
-                      </td>
-                      {platforms.map(plat => (
-                        <td key={plat} className="py-2 px-1 text-center" style={{borderBottomWidth:'0.5px',borderColor:'#f0ede6'}}>
-                          <RankBadge tier={platData[plat]?.tier || 'absent'} />
-                        </td>
-                      ))}
-                      <td className="py-2 pl-2" style={{borderBottomWidth:'0.5px',borderColor:'#f0ede6'}}>
-                        <ConsistencyPips pct={avgConsistency} />
-                      </td>
-                      <td className="py-2 pl-2 text-right font-medium text-gray-700" style={{borderBottomWidth:'0.5px',borderColor:'#f0ede6'}}>
-                        {totalClicks > 0 ? totalClicks : <span className="text-gray-300">—</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {promptResults.length > 8 && (
-            <button className="mt-3 text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1" onClick={() => setShowAllPrompts(!showAllPrompts)}>
-              {showAllPrompts ? <><i className="ti ti-chevron-up text-xs" />Show less</> : <><i className="ti ti-chevron-down text-xs" />Show all {promptResults.length} prompts</>}
-            </button>
-          )}
-        </div>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+
+                <td className="py-2 px-1 text-center" style={{borderBottomWidth: isExpanded ? '0' : '0.5px',borderColor:'#f0ede6'}}>
+                  {pr.category && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{background:cats.bg,color:cats.color}}>
+                      {CAT_LABELS[pr.category]}
+                    </span>
+                  )}
+                </td>
+
+                {platforms.map(plat => (
+                  <td key={plat} className="py-2 px-1 text-center" style={{borderBottomWidth: isExpanded ? '0' : '0.5px',borderColor:'#f0ede6'}}>
+                    <RankBadge tier={platData[plat]?.tier || 'absent'} />
+                  </td>
+                ))}
+
+                <td className="py-2 pl-2" style={{borderBottomWidth: isExpanded ? '0' : '0.5px',borderColor:'#f0ede6'}}>
+                  <ConsistencyPips pct={avgConsistency} />
+                </td>
+
+                <td className="py-2 pl-2 text-right font-medium text-gray-700" style={{borderBottomWidth: isExpanded ? '0' : '0.5px',borderColor:'#f0ede6'}}>
+                  {totalClicks > 0 ? totalClicks : <span className="text-gray-300">—</span>}
+                </td>
+              </tr>
+
+              {/* ── Expanded snippet panel ── */}
+              {isExpanded && (
+                <tr key={`${pr.id}-expanded`}>
+                  <td colSpan={platforms.length + 4} style={{borderBottomWidth:'0.5px',borderColor:'#f0ede6',padding:0}}>
+                    <div className="px-4 pb-4 pt-2" style={{background:'#faf9ff'}}>
+
+                      {snippets.length === 0 ? (
+                        <div className="text-xs text-gray-400 py-2 flex items-center gap-2">
+                          <i className="ti ti-info-circle text-xs" />
+                          No response snippets stored for this prompt — brand was not mentioned in any run.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {snippets.map(s => {
+                            const meta = PLATFORM_META[s.platform] || {};
+                            const sentimentConfig = {
+                              positive: { icon: 'ti-mood-happy',  color: '#0F6E56', bg: '#E1F5EE', label: 'Positive' },
+                              negative: { icon: 'ti-mood-sad',    color: '#791F1F', bg: '#FCEBEB', label: 'Negative' },
+                              neutral:  { icon: 'ti-mood-neutral', color: '#5F5E5A', bg: '#F1EFE8', label: 'Neutral'  },
+                            };
+                            const sent = sentimentConfig[s.sentiment] || sentimentConfig.neutral;
+                            const tierConfig = {
+                              primary:   { color: '#0F6E56', bg: '#E1F5EE' },
+                              top:       { color: '#185FA5', bg: '#E6F1FB' },
+                              mentioned: { color: '#854F0B', bg: '#FAEEDA' },
+                              buried:    { color: '#A32D2D', bg: '#FCEBEB' },
+                              absent:    { color: '#5F5E5A', bg: '#F1EFE8' },
+                            };
+                            const tc = tierConfig[s.tier] || tierConfig.absent;
+
+                            return (
+                              <div key={s.platform} className="rounded-lg overflow-hidden border"
+                                style={{borderWidth:'0.5px', borderColor:'#e8e6df'}}>
+
+                                {/* Platform header */}
+                                <div className="flex items-center justify-between px-3 py-2 border-b"
+                                  style={{borderBottomWidth:'0.5px',borderColor:'#e8e6df',background:'white'}}>
+                                  <div className="flex items-center gap-2">
+                                    <i className={`ti ${meta.icon || 'ti-robot'} text-sm`} style={{color:meta.color}} />
+                                    <span className="text-xs font-medium text-gray-800">{meta.label}</span>
+                                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full capitalize"
+                                      style={{background:tc.bg,color:tc.color}}>{s.tier}</span>
+                                  </div>
+                                  {/* Sentiment badge */}
+                                  <div className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full"
+                                    style={{background:sent.bg,color:sent.color}}>
+                                    <i className={`ti ${sent.icon} text-[10px]`} />
+                                    {sent.label}
+                                  </div>
+                                </div>
+
+                                {/* Snippet text with brand highlighted */}
+                                <div className="px-3 py-2.5" style={{background:'#fdfcff'}}>
+                                  <SnippetText
+                                    text={s.snippet}
+                                    brand={project.brand_name}
+                                    domain={project.domain}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+
+  {promptResults.length > 8 && (
+    <button className="mt-3 text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1"
+      onClick={() => setShowAllPrompts(!showAllPrompts)}>
+      {showAllPrompts
+        ? <><i className="ti ti-chevron-up text-xs" />Show less</>
+        : <><i className="ti ti-chevron-down text-xs" />Show all {promptResults.length} prompts</>}
+    </button>
+  )}
+</div>
 
         {/* Charts row */}
         <div className="grid grid-cols-2 gap-4">
