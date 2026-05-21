@@ -12,7 +12,13 @@ const PROG_STEPS = [
   { id: 'pf5', label: 'Generating prompts',   icon: 'ti-messages' },
 ];
 
-// Base API URL — works in both dev (Vite proxy) and production (Vercel → Railway)
+const CAT_STYLES = {
+  1: { bg: '#EEEDFE', color: '#3C3489', label: 'Niche discovery' },
+  2: { bg: '#E1F5EE', color: '#0F6E56', label: 'Brand info' },
+  3: { bg: '#FAEEDA', color: '#854F0B', label: 'General niche' },
+  4: { bg: '#FAECE7', color: '#712B13', label: 'Info hybrid' },
+};
+
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 export default function AddWebsite() {
@@ -26,7 +32,14 @@ export default function AddWebsite() {
   const [kwInput, setKwInput] = useState('');
   const [manualKws, setManualKws] = useState([]);
   const [launching, setLaunching] = useState(false);
-  const evtRef = useRef(null);
+
+  // Prompt preview state
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editingText, setEditingText] = useState('');
+  const [newPromptText, setNewPromptText] = useState('');
+  const [newPromptCat, setNewPromptCat] = useState(1);
+  const [showAddPrompt, setShowAddPrompt] = useState(false);
+  const [filterCat, setFilterCat] = useState(0);
 
   function addKeywords() {
     const lines = kwInput.split('\n').map(l => l.trim()).filter(Boolean);
@@ -38,21 +51,47 @@ export default function AddWebsite() {
     setManualKws(prev => prev.filter(k => k !== kw));
   }
 
-  async function doScan() {
-    if (!url.trim()) return toast.error('Enter a URL first');
-    setScanning(true);
-    setProgSteps(Array(5).fill(0));
-    setScanned(false);
-    setAnalysis(null);
-    setAutoPrompts([]);
+  function startEdit(idx) {
+    setEditingIdx(idx);
+    setEditingText(autoPrompts[idx].text);
+  }
 
-    // Always use fallbackScan — EventSource can't send auth headers in browser
-    // The /scan SSE route requires auth, so we use scan-simple (GET + auth header)
-    await fallbackScan();
+  function saveEdit(idx) {
+    if (!editingText.trim()) return toast.error('Prompt cannot be empty');
+    setAutoPrompts(prev => prev.map((p, i) => i === idx ? { ...p, text: editingText.trim() } : p));
+    setEditingIdx(null);
+    setEditingText('');
+  }
+
+  function cancelEdit() {
+    setEditingIdx(null);
+    setEditingText('');
+  }
+
+  function deletePrompt(idx) {
+    setAutoPrompts(prev => prev.filter((_, i) => i !== idx));
+    toast.success('Prompt removed');
+  }
+
+  function addNewPrompt() {
+    if (!newPromptText.trim()) return toast.error('Enter a prompt first');
+    setAutoPrompts(prev => [...prev, { text: newPromptText.trim(), category: newPromptCat, source: 'auto' }]);
+    setNewPromptText('');
+    setShowAddPrompt(false);
+    toast.success('Prompt added');
+  }
+
+  function movePrompt(idx, dir) {
+    const next = idx + dir;
+    if (next < 0 || next >= autoPrompts.length) return;
+    setAutoPrompts(prev => {
+      const arr = [...prev];
+      [arr[idx], arr[next]] = [arr[next], arr[idx]];
+      return arr;
+    });
   }
 
   async function fallbackScan() {
-    // Animate progress steps while API runs
     let stepIdx = 0;
     const stepTimer = setInterval(() => {
       if (stepIdx >= 5) { clearInterval(stepTimer); return; }
@@ -65,7 +104,6 @@ export default function AddWebsite() {
         `${API_BASE}/api/projects/scan-simple?url=${encodeURIComponent(url)}`,
         { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
       );
-
       clearInterval(stepTimer);
       setProgSteps(Array(5).fill(100));
 
@@ -81,8 +119,7 @@ export default function AddWebsite() {
         setScanning(false);
         setProgSteps(Array(5).fill(0));
       }
-
-    } catch (err) {
+    } catch {
       clearInterval(stepTimer);
       toast.error('Scan failed — please check the URL and try again');
       setScanning(false);
@@ -90,8 +127,23 @@ export default function AddWebsite() {
     }
   }
 
+  async function doScan() {
+    if (!url.trim()) return toast.error('Enter a URL first');
+    setScanning(true);
+    setProgSteps(Array(5).fill(0));
+    setScanned(false);
+    setAnalysis(null);
+    setAutoPrompts([]);
+    setEditingIdx(null);
+    setFilterCat(0);
+    await fallbackScan();
+  }
+
   async function launch() {
     if (!analysis) return;
+    if (autoPrompts.length === 0 && manualKws.length === 0) {
+      return toast.error('Add at least one prompt before launching');
+    }
     setLaunching(true);
     try {
       const { data } = await projectsApi.create({
@@ -106,8 +158,11 @@ export default function AddWebsite() {
     }
   }
 
-  const catColors = ['','bg-brand-50 text-brand-800','bg-teal-50 text-teal-600','bg-amber-50 text-[#854F0B]','bg-[#FAECE7] text-[#712B13]'];
-  const catLabels = ['','Niche & services','Brand informational','General niche','Info + niche hybrid'];
+  const filteredPrompts = filterCat === 0
+    ? autoPrompts
+    : autoPrompts.filter(p => p.category === filterCat);
+
+  const totalPrompts = autoPrompts.length + manualKws.length;
 
   return (
     <div className="min-h-screen bg-[#F7F6F2]">
@@ -139,7 +194,7 @@ export default function AddWebsite() {
         {/* Main card */}
         <div className="card">
           <h1 className="text-base font-medium text-gray-900 mb-1">Add your website</h1>
-          <p className="text-sm text-gray-500 mb-6">Enter your URL — we'll auto-scan and generate 16 tracking prompts across 4 categories. Add your own keywords too.</p>
+          <p className="text-sm text-gray-500 mb-6">Enter your URL — we'll auto-scan and generate 16 tracking prompts. Review and edit them before launching.</p>
 
           {/* URL input */}
           <div className="section-label">Website URL</div>
@@ -167,23 +222,22 @@ export default function AddWebsite() {
               {PROG_STEPS.map((step, i) => (
                 <div key={step.id} className="flex items-center gap-3">
                   <span className="text-xs text-gray-500 w-44 flex items-center gap-1.5 flex-shrink-0">
-                    <i className={`ti ${step.icon} text-xs`} />
-                    {step.label}
+                    <i className={`ti ${step.icon} text-xs`} />{step.label}
                   </span>
                   <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
                     <div className="h-full rounded-full transition-all duration-1000" style={{width:`${progSteps[i]}%`,background:'#7F77DD'}} />
                   </div>
-                  <span className={`text-xs w-12 text-right flex-shrink-0 ${progSteps[i]===100?'text-teal-400':'text-gray-400'}`}>
-                    {progSteps[i]===100 ? (i===4?'16 ready':'Done') : '...'}
+                  <span className={`text-xs w-14 text-right flex-shrink-0 ${progSteps[i]===100?'text-teal-400':'text-gray-400'}`}>
+                    {progSteps[i]===100 ? (i===4?`${autoPrompts.length} ready`:'Done') : '...'}
                   </span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Analysis result */}
+          {/* Analysis summary */}
           {scanned && analysis && (
-            <div className="mb-6 rounded-lg p-4 space-y-2" style={{background:'#F7F6F2'}}>
+            <div className="mb-5 rounded-lg p-4 space-y-2" style={{background:'#F7F6F2'}}>
               <div className="flex justify-between text-xs"><span className="text-gray-400">Brand</span><span className="font-medium text-gray-800">{analysis.brand_name}</span></div>
               <div className="flex justify-between text-xs"><span className="text-gray-400">Niche</span><span className="font-medium text-gray-800">{analysis.niche}</span></div>
               <div className="flex justify-between text-xs items-start gap-4">
@@ -202,15 +256,144 @@ export default function AddWebsite() {
                   ))}
                 </div>
               </div>
-              <div className="pt-1 text-xs text-gray-500 flex items-center gap-1.5">
-                <i className="ti ti-check text-teal-400" />
-                <span className="text-teal-600 font-medium">{autoPrompts.length} prompts</span> auto-generated across 4 categories
-              </div>
             </div>
           )}
 
+          {/* ── PROMPT PREVIEW ──────────────────────────────────── */}
+          {scanned && autoPrompts.length > 0 && (
+            <>
+              <div className="border-t mb-5" style={{borderTopWidth:'0.5px',borderColor:'#e8e6df'}} />
+
+              {/* Header */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="section-label" style={{marginBottom:0}}>Auto-generated prompts</span>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{background:'#EEEDFE',color:'#3C3489'}}>
+                    {autoPrompts.length}
+                  </span>
+                </div>
+                <span className="text-xs text-gray-400">Edit · delete · reorder</span>
+              </div>
+
+              {/* Category filter pills */}
+              <div className="flex gap-1.5 mb-3 flex-wrap">
+                <button onClick={() => setFilterCat(0)}
+                  className="text-[11px] font-medium px-2.5 py-1 rounded-full border transition-colors"
+                  style={{borderWidth:'0.5px',background:filterCat===0?'#7F77DD':'transparent',color:filterCat===0?'#fff':'#888780',borderColor:filterCat===0?'#7F77DD':'#d1d0c8'}}>
+                  All ({autoPrompts.length})
+                </button>
+                {[1,2,3,4].map(cat => {
+                  const count = autoPrompts.filter(p => p.category === cat).length;
+                  if (!count) return null;
+                  const s = CAT_STYLES[cat];
+                  return (
+                    <button key={cat} onClick={() => setFilterCat(filterCat === cat ? 0 : cat)}
+                      className="text-[11px] font-medium px-2.5 py-1 rounded-full border transition-colors"
+                      style={{borderWidth:'0.5px',background:filterCat===cat?s.bg:'transparent',color:filterCat===cat?s.color:'#888780',borderColor:filterCat===cat?s.color:'#d1d0c8'}}>
+                      {s.label} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Prompt list */}
+              <div className="space-y-1.5 mb-3">
+                {filteredPrompts.map((prompt) => {
+                  const realIdx = autoPrompts.indexOf(prompt);
+                  const catStyle = CAT_STYLES[prompt.category] || {};
+                  const isEditing = editingIdx === realIdx;
+
+                  return (
+                    <div key={realIdx}
+                      className="rounded-lg border transition-all"
+                      style={{borderWidth:'0.5px',borderColor:isEditing?'#7F77DD':'#e8e6df',background:isEditing?'#faf9ff':'#fff'}}>
+                      {isEditing ? (
+                        <div className="p-2.5">
+                          <input
+                            value={editingText}
+                            onChange={e => setEditingText(e.target.value)}
+                            onKeyDown={e => { if(e.key==='Enter') saveEdit(realIdx); if(e.key==='Escape') cancelEdit(); }}
+                            autoFocus
+                            className="w-full text-xs text-gray-800 bg-transparent outline-none"
+                            style={{fontFamily:'inherit'}}
+                          />
+                          <div className="flex items-center gap-2 mt-2">
+                            <button onClick={() => saveEdit(realIdx)}
+                              className="text-[11px] font-medium px-2.5 py-1 rounded-md text-white"
+                              style={{background:'#7F77DD'}}>Save</button>
+                            <button onClick={cancelEdit}
+                              className="text-[11px] font-medium px-2.5 py-1 rounded-md text-gray-500 border"
+                              style={{borderWidth:'0.5px',borderColor:'#d1d0c8'}}>Cancel</button>
+                            <span className="text-[10px] text-gray-400">Enter to save · Esc to cancel</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 px-3 py-2">
+                          {prompt.category && (
+                            <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full flex-shrink-0"
+                              style={{background:catStyle.bg,color:catStyle.color}}>C{prompt.category}</span>
+                          )}
+                          <span className="flex-1 text-xs text-gray-700 leading-relaxed">{prompt.text}</span>
+                          <div className="flex items-center gap-0.5 flex-shrink-0">
+                            <button onClick={() => movePrompt(realIdx,-1)} disabled={realIdx===0}
+                              className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:text-gray-600 disabled:opacity-20" title="Move up">
+                              <i className="ti ti-chevron-up text-xs" /></button>
+                            <button onClick={() => movePrompt(realIdx,1)} disabled={realIdx===autoPrompts.length-1}
+                              className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:text-gray-600 disabled:opacity-20" title="Move down">
+                              <i className="ti ti-chevron-down text-xs" /></button>
+                            <button onClick={() => startEdit(realIdx)}
+                              className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:text-blue-500" title="Edit">
+                              <i className="ti ti-pencil text-xs" /></button>
+                            <button onClick={() => deletePrompt(realIdx)}
+                              className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:text-red-400" title="Delete">
+                              <i className="ti ti-trash text-xs" /></button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add new prompt */}
+              {showAddPrompt ? (
+                <div className="rounded-lg border p-3 mb-3" style={{borderWidth:'0.5px',borderColor:'#7F77DD',background:'#faf9ff'}}>
+                  <div className="text-xs font-medium text-gray-700 mb-2">Add a prompt</div>
+                  <input
+                    value={newPromptText}
+                    onChange={e => setNewPromptText(e.target.value)}
+                    onKeyDown={e => { if(e.key==='Enter') addNewPrompt(); if(e.key==='Escape') setShowAddPrompt(false); }}
+                    placeholder="e.g. best digital marketing agency for startups"
+                    autoFocus
+                    className="w-full text-xs mb-2"
+                  />
+                  <div className="flex items-center gap-2">
+                    <select value={newPromptCat} onChange={e => setNewPromptCat(Number(e.target.value))}
+                      className="text-xs rounded border px-2 py-1"
+                      style={{borderWidth:'0.5px',borderColor:'#d1d0c8',background:'white',color:'#444'}}>
+                      {[1,2,3,4].map(c => (
+                        <option key={c} value={c}>Cat {c} — {CAT_STYLES[c].label}</option>
+                      ))}
+                    </select>
+                    <button onClick={addNewPrompt}
+                      className="text-[11px] font-medium px-2.5 py-1 rounded-md text-white"
+                      style={{background:'#7F77DD'}}>Add</button>
+                    <button onClick={() => setShowAddPrompt(false)}
+                      className="text-[11px] font-medium px-2.5 py-1 rounded-md text-gray-500 border"
+                      style={{borderWidth:'0.5px',borderColor:'#d1d0c8'}}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setShowAddPrompt(true)}
+                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 mb-1 py-1">
+                  <i className="ti ti-plus text-xs" />Add a prompt
+                </button>
+              )}
+            </>
+          )}
+
           {/* Divider */}
-          <div className="border-t mb-6" style={{borderTopWidth:'0.5px',borderColor:'#e8e6df'}} />
+          <div className="border-t mb-5 mt-2" style={{borderTopWidth:'0.5px',borderColor:'#e8e6df'}} />
 
           {/* Manual keywords */}
           <div className="flex items-center justify-between mb-2">
@@ -218,7 +401,7 @@ export default function AddWebsite() {
             <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{manualKws.length} added</span>
           </div>
           <p className="text-xs text-gray-400 mb-3 leading-relaxed">
-            Add specific prompts to track — competitor comparisons, niche queries, branded questions. One per line. These run alongside AI-generated ones.
+            Add extra prompts — competitor comparisons, niche queries, branded questions. One per line.
           </p>
           <textarea
             value={kwInput}
@@ -231,7 +414,6 @@ export default function AddWebsite() {
             <i className="ti ti-plus text-xs" />Add prompts
           </button>
 
-          {/* Manual tags */}
           {manualKws.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-4">
               {manualKws.map(kw => (
@@ -246,19 +428,21 @@ export default function AddWebsite() {
           {/* Info bar */}
           <div className="flex items-start gap-2.5 p-3 rounded-lg text-xs text-gray-500" style={{background:'#F7F6F2'}}>
             <i className="ti ti-info-circle text-gray-400 mt-0.5 flex-shrink-0" />
-            <span>Manual prompts get the same 5-platform × 3-run consistency check as auto-generated ones and appear labelled <span className="font-medium px-1.5 py-0.5 rounded text-[10px]" style={{background:'#EEEDFE',color:'#3C3489'}}>manual</span> in your report.</span>
+            <span>All prompts run across 5 platforms × 3 runs each and appear in your report with tier badges and consistency scores.</span>
           </div>
 
           {/* Footer */}
           <div className="flex items-center justify-between mt-6 pt-5 border-t" style={{borderTopWidth:'0.5px',borderColor:'#e8e6df'}}>
             <span className="text-xs text-gray-400">
-              {scanned ? `${autoPrompts.length + manualKws.length} prompts ready to check` : 'Enter URL and scan first'}
+              {scanned
+                ? `${totalPrompts} prompts ready — ${autoPrompts.length} auto · ${manualKws.length} manual`
+                : 'Enter URL and scan first'}
             </span>
             <button className="btn-primary flex items-center gap-2" onClick={launch}
-              disabled={!scanned || launching}>
+              disabled={!scanned || launching || totalPrompts === 0}>
               {launching
                 ? <><i className="ti ti-loader-2 animate-spin text-sm" />Launching...</>
-                : <><i className="ti ti-rocket text-sm" />Launch {autoPrompts.length + manualKws.length || ''} checks<i className="ti ti-arrow-right text-sm" /></>}
+                : <><i className="ti ti-rocket text-sm" />Launch {totalPrompts || ''} checks<i className="ti ti-arrow-right text-sm" /></>}
             </button>
           </div>
         </div>
