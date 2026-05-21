@@ -79,7 +79,7 @@ router.post('/scan', requireAuth, async (req, res) => {
 
 // ─── Create project + prompts + launch check run ─────────────────
 router.post('/', requireAuth, async (req, res) => {
-  const { url, analysis, prompts, manualKeywords = [], checkFrequency = 'weekly' } = req.body;
+  const { url, analysis, prompts, manualKeywords = [], checkFrequency = 'weekly', selectedPlatforms } = req.body;
   if (!url || !analysis) return res.status(400).json({ error: 'URL and analysis required' });
 
   try {
@@ -111,12 +111,16 @@ router.post('/', requireAuth, async (req, res) => {
       );
     }
 
-    const { rows: [run] } = await query(
-      `INSERT INTO check_runs (project_id, status) VALUES ($1,'queued') RETURNING *`,
-      [project.id]
-    );
+   const { rows: [run] } = await query(
+  `INSERT INTO check_runs (project_id, status) VALUES ($1,'queued') RETURNING *`,
+  [project.id]
+);
 
-    await checkQueue.add('run-checks', { checkRunId: run.id, projectId: project.id }, {
+await checkQueue.add('run-checks', {
+  checkRunId: run.id,
+  projectId: project.id,
+  selectedPlatforms: selectedPlatforms || null, // null = use all platforms
+}, {
       attempts: 2,
       backoff: { type: 'exponential', delay: 5000 }
     });
