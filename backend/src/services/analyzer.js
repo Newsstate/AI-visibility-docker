@@ -229,7 +229,12 @@ export async function generatePrompts(analysis) {
 
 // ─── Main: generateRecommendations ──────────────────────────────
 export async function generateRecommendations(promptScores, analysis) {
-  const summary = JSON.stringify(promptScores.slice(0, 20));
+const summary = JSON.stringify(promptScores.slice(0, 10).map(s => ({
+  prompt: s.prompt_text?.slice(0, 50),
+  platform: s.platform,
+  score: Math.round(s.avg_rank_score || 0),
+  tier: s.best_rank_tier
+})));
 
   try {
     const res = await anthropic.messages.create({
