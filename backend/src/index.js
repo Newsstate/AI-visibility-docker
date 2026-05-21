@@ -5,7 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 dotenv.config();
-
+import adminRouter from './routes/admin.js'; 
 import authRoutes from './routes/auth.js';
 import projectRoutes from './routes/projects.js';
 import reportRoutes from './routes/reports.js';
@@ -37,7 +37,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/track', trackRoutes);
-
+app.use('/api/admin', adminRouter);
 app.get('/health', (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ─── Scheduled re-checks ─────────────────────────────────────────
