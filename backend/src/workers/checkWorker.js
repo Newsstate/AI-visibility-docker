@@ -25,6 +25,7 @@ function calcGeoScore(platformScores) {
     total += (score || 0) * (weights[platform] || 0.2);
     weightSum += weights[platform] || 0.2;
   }
+  if (weightSum === 0) return 0; // ← ADD THIS
   return Math.round((total / weightSum) * 100) / 100;
 }
 
@@ -89,7 +90,9 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
 
       // ─── Aggregate after all 5 runs ─────────────────────────
       const mentions = runScores.filter(r => r.mentioned).length;
-      const avgScore = runScores.reduce((s, r) => s + r.score, 0) / RUNS_PER_PROMPT;
+    const avgScore = runScores.length > 0
+  ? runScores.reduce((s, r) => s + r.score, 0) / runScores.length
+  : 0;
       const consistencyPct = (mentions / RUNS_PER_PROMPT) * 100;
       const bestTier = runScores.sort((a, b) => b.score - a.score)[0]?.tier || 'absent';
 
