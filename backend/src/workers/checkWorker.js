@@ -54,7 +54,7 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
       // ─── Run loop (5 runs per prompt/platform) ──────────────
       for (let run = 1; run <= RUNS_PER_PROMPT; run++) {
         try {
-          await new Promise(r => setTimeout(r, 500));
+       
 
           const response = await checkPlatform(platform, prompt.text);
           const scored = scoreResponse(
@@ -93,7 +93,9 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
     const avgScore = runScores.length > 0
   ? runScores.reduce((s, r) => s + r.score, 0) / runScores.length
   : 0;
-      const consistencyPct = (mentions / RUNS_PER_PROMPT) * 100;
+     const consistencyPct = runScores.length > 0
+  ? (mentions / runScores.length) * 100
+  : 0;
       const bestTier = runScores.sort((a, b) => b.score - a.score)[0]?.tier || 'absent';
 
       await query(`
