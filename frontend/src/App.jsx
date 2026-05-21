@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import AddWebsite from './pages/AddWebsite.jsx';
 import RunningChecks from './pages/RunningChecks.jsx';
 import ReportDashboard from './pages/ReportDashboard.jsx';
+import AdminDashboard from './pages/AdminDashboard.jsx'; 
 import './styles/global.css';
 
 export default function App() {
@@ -29,7 +30,7 @@ export default function App() {
         <Route path="/add"       element={<ProtectedRoute><AddWebsite /></ProtectedRoute>} />
         <Route path="/checking/:runId"    element={<ProtectedRoute><RunningChecks /></ProtectedRoute>} />
         <Route path="/report/:projectId"  element={<ProtectedRoute><ReportDashboard /></ProtectedRoute>} />
-
+        <Route path="/admin" element={<AdminDashboard />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
