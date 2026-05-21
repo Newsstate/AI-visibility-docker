@@ -43,6 +43,21 @@ router.get('/project/:projectId', requireAuth, async (req, res) => {
     ORDER BY avg_score DESC
   `, [latestRun.id]);
 
+  // Sentiment breakdown per platform (from raw prompt_results)
+const { rows: sentimentByPlatform } = await query(`
+  SELECT
+    platform,
+    COUNT(*) FILTER (WHERE sentiment = 'positive') as positive,
+    COUNT(*) FILTER (WHERE sentiment = 'neutral')  as neutral,
+    COUNT(*) FILTER (WHERE sentiment = 'negative') as negative,
+    COUNT(*) FILTER (WHERE mentioned = true)       as mentioned_total,
+    COUNT(*)                                       as total
+  FROM prompt_results
+  WHERE check_run_id = $1
+  GROUP BY platform
+  ORDER BY platform
+`, [latestRun.id]);
+  
   // Prompt results with details
 const { rows: promptResults } = await query(`
   SELECT
@@ -130,12 +145,13 @@ const { rows: promptResults } = await query(`
     ? Math.round(((clickTotals.this_month - clickTotals.last_month) / clickTotals.last_month) * 100)
     : null;
 
-  res.json({
-    project,
-    run: latestRun,
-    hasData: true,
-    platformScores,
-    promptResults,
+ res.json({
+  project,
+  run: latestRun,
+  hasData: true,
+  platformScores,
+  sentimentByPlatform,
+  promptResults,
     clicksByPlatform,
     clickJourney,
     scoreHistory: scoreHistory.reverse(),
