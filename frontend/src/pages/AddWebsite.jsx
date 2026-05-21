@@ -12,6 +12,9 @@ const PROG_STEPS = [
   { id: 'pf5', label: 'Generating prompts',   icon: 'ti-messages' },
 ];
 
+// Base API URL — works in both dev (Vite proxy) and production (Vercel → Railway)
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 export default function AddWebsite() {
   const nav = useNavigate();
   const [url, setUrl] = useState('');
@@ -40,92 +43,51 @@ export default function AddWebsite() {
     setScanning(true);
     setProgSteps(Array(5).fill(0));
     setScanned(false);
+    setAnalysis(null);
+    setAutoPrompts([]);
 
-    try {
-      const evtSource = new EventSource(`/api/projects/scan?url=${encodeURIComponent(url)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      });
-      evtRef.current = evtSource;
-
-      // Simulate progress steps while waiting for real SSE
-      let stepIdx = 0;
-      const stepTimer = setInterval(() => {
-        if (stepIdx >= 5) { clearInterval(stepTimer); return; }
-        setProgSteps(prev => prev.map((v, i) => i === stepIdx ? 100 : v));
-        stepIdx++;
-      }, 900);
-
-      evtSource.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.step === 'complete') {
-          clearInterval(stepTimer);
-          setProgSteps(Array(5).fill(100));
-          setAnalysis(data.analysis);
-          setAutoPrompts(data.prompts || []);
-          setScanned(true);
-          setScanning(false);
-          evtSource.close();
-        }
-        if (data.step === 'error') {
-          clearInterval(stepTimer);
-          toast.error(data.message || 'Scan failed');
-          setScanning(false);
-          evtSource.close();
-        }
-      };
-
-      evtSource.onerror = () => {
-        // SSE may not support auth header in browser — use fallback polling
-        clearInterval(stepTimer);
-        evtSource.close();
-        fallbackScan();
-      };
-    } catch {
-      fallbackScan();
-    }
+    // Always use fallbackScan — EventSource can't send auth headers in browser
+    // The /scan SSE route requires auth, so we use scan-simple (GET + auth header)
+    await fallbackScan();
   }
 
   async function fallbackScan() {
-    // Simulate scan with progress animation then call API
-    for (let i = 0; i < 5; i++) {
-      await new Promise(r => setTimeout(r, 900));
-      setProgSteps(prev => prev.map((v, idx) => idx <= i ? 100 : v));
-    }
+    // Animate progress steps while API runs
+    let stepIdx = 0;
+    const stepTimer = setInterval(() => {
+      if (stepIdx >= 5) { clearInterval(stepTimer); return; }
+      setProgSteps(prev => prev.map((v, i) => i === stepIdx ? 100 : v));
+      stepIdx++;
+    }, 900);
+
     try {
-      const res = await fetch(`/api/projects/scan-simple?url=${encodeURIComponent(url)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      });
+      const res = await fetch(
+        `${API_BASE}/api/projects/scan-simple?url=${encodeURIComponent(url)}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+      );
+
+      clearInterval(stepTimer);
+      setProgSteps(Array(5).fill(100));
+
       if (res.ok) {
         const data = await res.json();
         setAnalysis(data.analysis);
         setAutoPrompts(data.prompts || []);
+        setScanned(true);
+        setScanning(false);
       } else {
-        // Demo mode - use placeholder analysis
-        setAnalysis({
-          brand_name: new URL(url.startsWith('http') ? url : 'https://' + url).hostname.replace('www.','').split('.')[0],
-          niche: 'Website / Online Business',
-          target_audience: 'General audience',
-          services: ['Core service 1', 'Core service 2', 'Core service 3'],
-          competitors: ['Competitor A', 'Competitor B', 'Competitor C'],
-          geo_signals: ['Global'],
-          usp: 'Quality service for target audience'
-        });
-        setAutoPrompts([
-          {text:'best service in this niche',category:1},{text:'top tools for this category',category:1},
-          {text:'how to choose the right platform',category:1},{text:'leading platforms in this space',category:1},
-          {text:'brand name review and pricing',category:2},{text:'is brand name good for beginners',category:2},
-          {text:'brand name vs competitors',category:2},{text:'brand name features and benefits',category:2},
-          {text:'best platform for this use case',category:3},{text:'top tools for professionals',category:3},
-          {text:'affordable solutions in this category',category:3},{text:'recommended platforms 2026',category:3},
-          {text:'which platform is best for beginners',category:4},{text:'informational guide to this niche',category:4},
-          {text:'how to get started with this service',category:4},{text:'complete guide to choosing the right tool',category:4},
-        ]);
+        const errData = await res.json().catch(() => ({}));
+        toast.error(errData.error || 'Scan failed — please try again');
+        setScanning(false);
+        setProgSteps(Array(5).fill(0));
       }
-    } catch {
-      setAnalysis({ brand_name: 'Your Brand', niche: 'Business', target_audience: 'Users', services: [], competitors: [], geo_signals: [] });
+
+    } catch (err) {
+      clearInterval(stepTimer);
+      toast.error('Scan failed — please check the URL and try again');
+      setScanning(false);
+      setProgSteps(Array(5).fill(0));
     }
-    setScanned(true);
-    setScanning(false);
   }
 
   async function launch() {
@@ -186,7 +148,7 @@ export default function AddWebsite() {
               value={url}
               onChange={e => setUrl(e.target.value)}
               placeholder="https://yoursite.com"
-              onKeyDown={e => e.key === 'Enter' && doScan()}
+              onKeyDown={e => e.key === 'Enter' && !scanning && !scanned && doScan()}
               disabled={scanning || scanned}
             />
             <button className="btn-primary flex-shrink-0 flex items-center gap-2" onClick={doScan}
@@ -227,7 +189,7 @@ export default function AddWebsite() {
               <div className="flex justify-between text-xs items-start gap-4">
                 <span className="text-gray-400 flex-shrink-0">Services</span>
                 <div className="flex flex-wrap gap-1 justify-end">
-                  {(analysis.services||[]).slice(0,5).map(s => (
+                  {(Array.isArray(analysis.services) ? analysis.services : []).slice(0,5).map(s => (
                     <span key={s} className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{background:'#EEEDFE',color:'#3C3489'}}>{s}</span>
                   ))}
                 </div>
@@ -235,7 +197,7 @@ export default function AddWebsite() {
               <div className="flex justify-between text-xs items-start gap-4">
                 <span className="text-gray-400 flex-shrink-0">Competitors</span>
                 <div className="flex flex-wrap gap-1 justify-end">
-                  {(analysis.competitors||[]).slice(0,4).map(c => (
+                  {(Array.isArray(analysis.competitors) ? analysis.competitors : []).slice(0,4).map(c => (
                     <span key={c} className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{c}</span>
                   ))}
                 </div>
@@ -284,7 +246,7 @@ export default function AddWebsite() {
           {/* Info bar */}
           <div className="flex items-start gap-2.5 p-3 rounded-lg text-xs text-gray-500" style={{background:'#F7F6F2'}}>
             <i className="ti ti-info-circle text-gray-400 mt-0.5 flex-shrink-0" />
-            <span>Manual prompts get the same 5-platform × 5-run consistency check as auto-generated ones and appear labelled <span className="font-medium px-1.5 py-0.5 rounded text-[10px]" style={{background:'#EEEDFE',color:'#3C3489'}}>manual</span> in your report.</span>
+            <span>Manual prompts get the same 5-platform × 3-run consistency check as auto-generated ones and appear labelled <span className="font-medium px-1.5 py-0.5 rounded text-[10px]" style={{background:'#EEEDFE',color:'#3C3489'}}>manual</span> in your report.</span>
           </div>
 
           {/* Footer */}
