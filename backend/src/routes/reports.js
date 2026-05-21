@@ -44,21 +44,41 @@ router.get('/project/:projectId', requireAuth, async (req, res) => {
   `, [latestRun.id]);
 
   // Prompt results with details
-  const { rows: promptResults } = await query(`
-    SELECT
-      p.id, p.text, p.category, p.source,
-      json_object_agg(ps.platform, json_build_object(
-        'tier', ps.best_rank_tier,
-        'score', ps.avg_rank_score,
-        'consistency', ps.consistency_pct,
-        'clicks', ps.clicks
-      )) as platforms
-    FROM prompts p
-    LEFT JOIN prompt_scores ps ON ps.prompt_id = p.id AND ps.check_run_id=$1
-    WHERE p.project_id=$2 AND p.is_active=true
-    GROUP BY p.id, p.text, p.category, p.source
-    ORDER BY p.source DESC, p.category ASC
-  `, [latestRun.id, projectId]);
+const { rows: promptResults } = await query(`
+  SELECT
+    p.id, p.text, p.category, p.source,
+    json_object_agg(ps.platform, json_build_object(
+      'tier',        ps.best_rank_tier,
+      'score',       ps.avg_rank_score,
+      'consistency', ps.consistency_pct,
+      'clicks',      ps.clicks,
+      'snippet',     (
+        SELECT pr.response_snippet
+        FROM prompt_results pr
+        WHERE pr.prompt_id = p.id
+          AND pr.check_run_id = $1
+          AND pr.platform = ps.platform
+          AND pr.response_snippet IS NOT NULL
+          AND pr.mentioned = true
+        ORDER BY pr.created_at DESC
+        LIMIT 1
+      ),
+      'sentiment', (
+        SELECT pr.sentiment
+        FROM prompt_results pr
+        WHERE pr.prompt_id = p.id
+          AND pr.check_run_id = $1
+          AND pr.platform = ps.platform
+        ORDER BY pr.created_at DESC
+        LIMIT 1
+      )
+    )) as platforms
+  FROM prompts p
+  LEFT JOIN prompt_scores ps ON ps.prompt_id = p.id AND ps.check_run_id=$1
+  WHERE p.project_id=$2 AND p.is_active=true
+  GROUP BY p.id, p.text, p.category, p.source
+  ORDER BY p.source DESC, p.category ASC
+`, [latestRun.id, projectId]);
 
   // Clicks by platform (this month)
   const { rows: clicksByPlatform } = await query(`
