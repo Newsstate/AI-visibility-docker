@@ -8,123 +8,180 @@ import { query } from '../db/pool.js';
 import { checkPlatform, scoreResponse, PLATFORMS, RUNS_PER_PROMPT } from '../services/platformChecker.js';
 import { generateRecommendations } from '../services/analyzer.js';
 
-const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-  maxRetriesPerRequest: null
-});
-const pubClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+// ─── Fix: use REDIS_PUBLIC to avoid Railway overriding REDIS_URL ─
+const REDIS_URL = process.env.REDIS_PUBLIC || process.env.REDIS_URL || 'redis://localhost:6379';
 
-// ─── Queue definitions ───────────────────────────────────────────
-export const checkQueue = new Queue('visibility-checks', { connection });
+const connection = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
+const pubClient  = new Redis(REDIS_URL);
+
+// Handle Redis connection errors gracefully
+connection.on('error', err => console.error('Redis connection error:', err.message));
+pubClient.on('error',  err => console.error('Redis pubClient error:', err.message));
+
+// ─── Queue definitions ────────────────────────────────────────────
+export const checkQueue       = new Queue('visibility-checks', { connection });
 export const checkQueueEvents = new QueueEvents('visibility-checks', { connection });
 
-// ─── GEO Score calculator ────────────────────────────────────────
+// ─── GEO Score calculator ─────────────────────────────────────────
 function calcGeoScore(platformScores) {
-  const weights = { chatgpt: 0.25, perplexity: 0.25, gemini: 0.20, claude: 0.15, ai_overview: 0.15 };
+  const weights = { chatgpt:0.25, perplexity:0.25, gemini:0.20, claude:0.15, ai_overview:0.15 };
   let total = 0, weightSum = 0;
   for (const [platform, score] of Object.entries(platformScores)) {
-    total += (score || 0) * (weights[platform] || 0.2);
+    total     += (score || 0) * (weights[platform] || 0.2);
     weightSum += weights[platform] || 0.2;
   }
-  if (weightSum === 0) return 0; // ← ADD THIS
+  if (weightSum === 0) return 0;
   return Math.round((total / weightSum) * 100) / 100;
+}
+
+// ─── Batch DB insert helper ───────────────────────────────────────
+async function batchInsertResults(rows) {
+  if (!rows.length) return;
+  const values = rows.map((_, i) => {
+    const b = i * 9;
+    return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9})`;
+  }).join(',');
+  const params = rows.flatMap(r => [
+    r.checkRunId, r.promptId, r.platform, r.tier, r.score,
+    r.sentiment, r.snippet, r.mentioned, r.runIndex
+  ]);
+  await query(`
+    INSERT INTO prompt_results
+      (check_run_id, prompt_id, platform, rank_tier, rank_score, sentiment, response_snippet, mentioned, run_index)
+    VALUES ${values}
+  `, params);
 }
 
 // ─── Worker ──────────────────────────────────────────────────────
 export const checkWorker = new Worker('visibility-checks', async (job) => {
-const { checkRunId, projectId, selectedPlatforms } = job.data;
+  const { checkRunId, projectId, selectedPlatforms } = job.data;
 
   await query(`UPDATE check_runs SET status='running', started_at=NOW() WHERE id=$1`, [checkRunId]);
 
   const { rows: [project] } = await query(`SELECT * FROM projects WHERE id=$1`, [projectId]);
-  const { rows: prompts } = await query(
+  const { rows: prompts }   = await query(
     `SELECT * FROM prompts WHERE project_id=$1 AND is_active=true`, [projectId]
   );
 
- // Use selected platforms from job data, fall back to all platforms
-const activePlatforms = (selectedPlatforms && selectedPlatforms.length > 0)
-  ? PLATFORMS.filter(p => selectedPlatforms.includes(p))
-  : PLATFORMS;
+  // Use selected platforms or fall back to all
+  const activePlatforms = (selectedPlatforms?.length > 0)
+    ? PLATFORMS.filter(p => selectedPlatforms.includes(p))
+    : PLATFORMS;
 
-const totalQueries = prompts.length * activePlatforms.length * RUNS_PER_PROMPT;
+  const totalQueries = prompts.length * activePlatforms.length * RUNS_PER_PROMPT;
   await query(`UPDATE check_runs SET total_queries=$1 WHERE id=$2`, [totalQueries, checkRunId]);
 
   let completedQueries = 0;
   const platformTotals = {};
+  const resultBatch    = [];
 
-  // ─── Prompt loop ─────────────────────────────────────────────
-  for (const prompt of prompts) {
-  for (const platform of activePlatforms) {
-      const runScores = [];
+  // ─── Process prompts in parallel batches of 4 ────────────────
+  const BATCH_SIZE = 4;
 
-      // ─── Run loop (5 runs per prompt/platform) ──────────────
-      for (let run = 1; run <= RUNS_PER_PROMPT; run++) {
-        try {
-       
+  for (let i = 0; i < prompts.length; i += BATCH_SIZE) {
+    const batch = prompts.slice(i, i + BATCH_SIZE);
 
-          const response = await checkPlatform(platform, prompt.text);
-          const scored = scoreResponse(
-            response || '',
-            project.brand_name || project.domain,
-            project.domain
-          );
+    // All prompts in batch run simultaneously
+    await Promise.all(batch.map(async (prompt) => {
 
-          await query(`
-            INSERT INTO prompt_results
-              (check_run_id, prompt_id, platform, rank_tier, rank_score, sentiment, response_snippet, mentioned, run_index)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-          `, [checkRunId, prompt.id, platform, scored.tier, scored.score,
-              scored.sentiment, scored.snippet?.slice(0, 500), scored.mentioned, run]);
+      // All platforms run simultaneously per prompt
+      await Promise.all(activePlatforms.map(async (platform) => {
+        const runScores = [];
 
-          runScores.push(scored);
-        } catch (err) {
-          console.error(`Check failed: ${platform} / ${prompt.text.slice(0, 40)}`, err.message);
-        }
+        // Runs are sequential per platform (avoids burst rate limits)
+        for (let run = 1; run <= RUNS_PER_PROMPT; run++) {
+          try {
+            const response = await checkPlatform(platform, prompt.text);
+            const scored   = scoreResponse(
+              response || '',
+              project.brand_name || project.domain,
+              project.domain
+            );
 
-        completedQueries++;
-        await query(`UPDATE check_runs SET completed_queries=$1 WHERE id=$2`, [completedQueries, checkRunId]);
+            // Collect for batch insert instead of individual writes
+            resultBatch.push({
+              checkRunId, promptId: prompt.id, platform,
+              tier:      scored.tier,
+              score:     scored.score,
+              sentiment: scored.sentiment,
+              snippet:   scored.snippet?.slice(0, 500) || null,
+              mentioned: scored.mentioned,
+              runIndex:  run
+            });
 
-        await pubClient.publish(`check:${checkRunId}`, JSON.stringify({
-          type: 'progress',
-          completed: completedQueries,
-          total: totalQueries,
-          platform,
-          promptText: prompt.text.slice(0, 60),
-          tier: runScores[runScores.length - 1]?.tier || 'absent'
-        }));
-      } // ← run loop ends here
+            runScores.push(scored);
+          } catch (err) {
+            console.error(`Check failed: ${platform} / ${prompt.text.slice(0,40)}`, err.message);
+          }
 
-      // ─── Aggregate after all 5 runs ─────────────────────────
-      const mentions = runScores.filter(r => r.mentioned).length;
-    const avgScore = runScores.length > 0
-  ? runScores.reduce((s, r) => s + r.score, 0) / runScores.length
-  : 0;
-     const consistencyPct = runScores.length > 0
-  ? (mentions / runScores.length) * 100
-  : 0;
-      const bestTier = runScores.sort((a, b) => b.score - a.score)[0]?.tier || 'absent';
+          completedQueries++;
 
-      await query(`
-        INSERT INTO prompt_scores
-          (check_run_id, prompt_id, platform, avg_rank_score, consistency_pct, best_rank_tier)
-        VALUES ($1,$2,$3,$4,$5,$6)
-        ON CONFLICT (check_run_id, prompt_id, platform)
-        DO UPDATE SET avg_rank_score=$4, consistency_pct=$5, best_rank_tier=$6
-      `, [checkRunId, prompt.id, platform, avgScore, consistencyPct, bestTier]);
+          // Update DB every 10 queries instead of every 1
+          if (completedQueries % 10 === 0 || completedQueries === totalQueries) {
+            await query(
+              `UPDATE check_runs SET completed_queries=$1 WHERE id=$2`,
+              [completedQueries, checkRunId]
+            );
+          }
 
-      if (!platformTotals[platform]) platformTotals[platform] = [];
-      platformTotals[platform].push(avgScore);
+          // Publish live progress to SSE (every query for smooth UI)
+          try {
+            await pubClient.publish(`check:${checkRunId}`, JSON.stringify({
+              type:       'progress',
+              completed:  completedQueries,
+              total:      totalQueries,
+              platform,
+              promptText: prompt.text.slice(0, 60),
+              tier:       runScores[runScores.length - 1]?.tier || 'absent'
+            }));
+          } catch (pubErr) {
+            // Don't crash if Redis pub fails — just log and continue
+            console.warn('Redis publish failed:', pubErr.message);
+          }
+        } // run loop
 
-    } // ← platform loop ends here
-  } // ← prompt loop ends here
+        // Aggregate scores after all runs for this platform
+        const mentions       = runScores.filter(r => r.mentioned).length;
+        const avgScore       = runScores.length > 0
+          ? runScores.reduce((s, r) => s + r.score, 0) / runScores.length : 0;
+        const consistencyPct = runScores.length > 0
+          ? (mentions / runScores.length) * 100 : 0;
+        const bestTier       = [...runScores].sort((a,b) => b.score - a.score)[0]?.tier || 'absent';
 
-  // ─── Final scoring ───────────────────────────────────────────
+        await query(`
+          INSERT INTO prompt_scores
+            (check_run_id, prompt_id, platform, avg_rank_score, consistency_pct, best_rank_tier)
+          VALUES ($1,$2,$3,$4,$5,$6)
+          ON CONFLICT (check_run_id, prompt_id, platform)
+          DO UPDATE SET avg_rank_score=$4, consistency_pct=$5, best_rank_tier=$6
+        `, [checkRunId, prompt.id, platform, avgScore, consistencyPct, bestTier]);
+
+        if (!platformTotals[platform]) platformTotals[platform] = [];
+        platformTotals[platform].push(avgScore);
+
+      })); // platform parallel
+    })); // prompt batch parallel
+
+    // Batch insert all raw results collected in this batch
+    if (resultBatch.length > 0) {
+      try {
+        await batchInsertResults([...resultBatch]);
+        resultBatch.length = 0;
+      } catch (err) {
+        console.error('Batch insert failed, skipping:', err.message);
+        resultBatch.length = 0;
+      }
+    }
+  } // batch loop
+
+  // ─── Final GEO scoring ────────────────────────────────────────
   const platformAverages = {};
   for (const [plat, scores] of Object.entries(platformTotals)) {
-    platformAverages[plat] = scores.reduce((a, b) => a + b, 0) / scores.length;
+    platformAverages[plat] = scores.reduce((a,b) => a+b, 0) / scores.length;
   }
   const geoScore = calcGeoScore(platformAverages);
 
-  // ─── AI Recommendations ──────────────────────────────────────
+  // ─── AI Recommendations ───────────────────────────────────────
   const { rows: scores } = await query(`
     SELECT ps.*, p.text as prompt_text, p.category
     FROM prompt_scores ps
@@ -136,8 +193,8 @@ const totalQueries = prompts.length * activePlatforms.length * RUNS_PER_PROMPT;
   try {
     const recs = await generateRecommendations(scores, {
       brand_name: project.brand_name,
-      niche: project.niche,
-      services: project.services
+      niche:      project.niche,
+      services:   project.services
     });
     for (const rec of recs) {
       await query(`
@@ -147,7 +204,7 @@ const totalQueries = prompts.length * activePlatforms.length * RUNS_PER_PROMPT;
     }
   } catch {}
 
-  // ─── Mark complete ───────────────────────────────────────────
+  // ─── Mark complete ────────────────────────────────────────────
   await query(`
     UPDATE check_runs SET status='completed', completed_at=NOW(), geo_score=$1 WHERE id=$2
   `, [geoScore, checkRunId]);
