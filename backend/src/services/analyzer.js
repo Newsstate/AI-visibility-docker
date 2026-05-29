@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const FAST_MODEL = 'claude-haiku-4-5-20251001';
 
 // ─── Industry keyword detector ────────────────────────────────────
 const INDUSTRY_MAP = [
@@ -22,7 +23,6 @@ const INDUSTRY_MAP = [
   { match: /logistics|supply chain|shipping|freight|transport/i, label: 'Logistics and supply chain' },
 ];
 
-// ─── Service keyword extractor from body text ────────────────────
 const SERVICE_PATTERNS = [
   { match: /contract manufactur/i, label: 'Contract Manufacturing' },
   { match: /bottling/i, label: 'Bottling Facilities' },
@@ -44,7 +44,6 @@ const SERVICE_PATTERNS = [
   { match: /finance|accounting/i, label: 'Financial Services' },
 ];
 
-// ─── Competitor map by industry ──────────────────────────────────
 const COMPETITOR_MAP = {
   'Alcohol distillery and breweries': ['United Spirits', 'Radico Khaitan', 'Pernod Ricard India', 'Allied Blenders'],
   'Digital marketing agency': ['WebFX', 'PageTraffic', 'Ignite Digital', 'SEOValley'],
@@ -55,7 +54,6 @@ const COMPETITOR_MAP = {
   'Education and training': ['Byju\'s', 'Unacademy', 'Coursera', 'Udemy'],
 };
 
-// ─── Fallback: smart rule-based website analyzer ─────────────────
 function extractBasicInfo(pages) {
   const home = pages[0];
   const title = home?.meta?.title || '';
@@ -64,13 +62,11 @@ function extractBasicInfo(pages) {
   const h2s = pages.flatMap(p => p.meta?.h2s || []);
   const bodyText = pages.map(p => p.text).join(' ');
 
-  // Smart brand — last segment after | or - (most sites put brand last)
   const titleParts = title.split(/[|\-–]/);
   const brand_name = titleParts.length > 1
     ? titleParts[titleParts.length - 1].trim()
     : titleParts[0].trim() || 'Brand';
 
-  // Smart niche — H1 → description → industry detection from body
   let niche = h1s[0] || description.split('.')[0] || '';
   if (!niche || niche.length > 80) {
     for (const industry of INDUSTRY_MAP) {
@@ -82,7 +78,6 @@ function extractBasicInfo(pages) {
   }
   if (!niche) niche = titleParts[0].trim();
 
-  // Smart services — from H2s first, then body text patterns
   const NOISE_WORDS = ['our', 'we ', 'client', 'proven', 'track', 'record',
     'well', 'regarded', 'leading', 'top', 'best', 'about', 'contact',
     'team', 'portfolio', 'blog', 'news', 'faq', 'why choose',
@@ -93,27 +88,20 @@ function extractBasicInfo(pages) {
     .filter(h => h.length < 45)
     .filter(h => !NOISE_WORDS.some(n => h.toLowerCase().includes(n)));
 
-  // If H2-based services are poor, extract from body text
   if (services.length < 2) {
-    services = SERVICE_PATTERNS
-      .filter(s => s.match.test(bodyText))
-      .map(s => s.label);
+    services = SERVICE_PATTERNS.filter(s => s.match.test(bodyText)).map(s => s.label);
   }
   services = services.slice(0, 6);
 
-  // Smart geo — from description or body
   const geoMatch = (description + ' ' + bodyText).match(
     /\bin ([\w\s]+?)(?:\s+offering|\s+providing|\s+based|\s+located|\.|,)/i
   );
   const geo_signals = geoMatch ? [geoMatch[1].trim()] : ['India'];
-
-  // Smart competitors — from industry map
   const competitors = COMPETITOR_MAP[niche] || [];
 
   return { brand_name, niche, target_audience: 'Businesses and individuals', services, competitors, geo_signals, usp: description || title };
 }
 
-// ─── Fallback: smart template-based prompt generator ─────────────
 function generateTemplatePrompts(analysis) {
   const { brand_name = 'Brand', niche = 'service', services = [], competitors = [] } = analysis;
   const s1 = services[0] || niche;
@@ -124,25 +112,18 @@ function generateTemplatePrompts(analysis) {
   const comp = competitors[0] || 'top alternatives';
 
   return [
-    // Category 1 — Niche discovery (no brand)
     { text: `best ${nicheL} in India`, category: 1 },
     { text: `top ${s1L} companies`, category: 1 },
     { text: `${nicheL} recommendations`, category: 1 },
     { text: `leading ${s2L} providers`, category: 1 },
-
-    // Category 2 — Brand informational
     { text: `${brand_name} review and products`, category: 2 },
     { text: `how does ${brand_name} work`, category: 2 },
     { text: `is ${brand_name} a good company`, category: 2 },
     { text: `${brand_name} vs ${comp}`, category: 2 },
-
-    // Category 3 — General niche keywords
     { text: `how to choose the best ${nicheL}`, category: 3 },
     { text: `${s1L} best practices for businesses`, category: 3 },
     { text: `what to look for in a ${s1L} provider`, category: 3 },
     { text: `${nicheL} industry trends`, category: 3 },
-
-    // Category 4 — Informational hybrid
     { text: `which ${nicheL} is best for small business`, category: 4 },
     { text: `best ${s1L} for growing companies`, category: 4 },
     { text: `how to improve results with ${s2L}`, category: 4 },
@@ -150,7 +131,6 @@ function generateTemplatePrompts(analysis) {
   ];
 }
 
-// ─── Fallback: rule-based recommendations ────────────────────────
 function generateRuleBasedRecommendations(promptScores, analysis) {
   const recs = [];
   const brandName = analysis?.brand_name || 'Your brand';
@@ -179,77 +159,185 @@ function generateRuleBasedRecommendations(promptScores, analysis) {
   return recs;
 }
 
-// ─── Main: analyzeWebsite ────────────────────────────────────────
 export async function analyzeWebsite(pages) {
-  const combined = pages.map(p =>
-    `URL: ${p.url}\nTitle: ${p.meta.title}\nDescription: ${p.meta.description}\nH1s: ${p.meta.h1s.join(', ')}\nContent: ${p.text.slice(0, 2000)}`
-  ).join('\n\n---\n\n');
+  const combined = pages.slice(0, 3).map(p =>
+    `URL: ${p.url}\nTitle: ${p.meta.title}\nDesc: ${p.meta.description}\nH1: ${p.meta.h1s.slice(0,2).join(', ')}\nH2: ${p.meta.h2s.slice(0,4).join(', ')}\nContent: ${p.text.slice(0, 800)}`
+  ).join('\n---\n');
 
   try {
     const res = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: `Analyze this website content and extract structured information. Respond ONLY with valid JSON, no markdown, no explanation.\n\nWebsite content:\n${combined}\n\nReturn this exact JSON structure:\n{\n  "brand_name": "string",\n  "niche": "string (short, e.g. 'Digital marketing agency in India')",\n  "target_audience": "string",\n  "services": ["array", "of", "core", "services", "max 6"],\n  "competitors": ["array", "of", "likely", "competitor", "brand", "names", "max 5"],\n  "geo_signals": ["array", "of", "location", "signals", "e.g. India, global"],\n  "usp": "unique selling proposition in one sentence"\n}` }]
+      model: FAST_MODEL,
+      max_tokens: 800,
+      messages: [{ role: 'user', content: `Analyze this website. Respond ONLY with valid JSON, no markdown.\n\n${combined}\n\nReturn:\n{"brand_name":"string","niche":"string","target_audience":"string","services":["max 6"],"competitors":["max 5"],"geo_signals":["locations"],"usp":"one sentence"}` }]
     });
-
     const text = res.content[0].text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(text);
-    console.log('✅ Claude analyzed website successfully');
+    console.log('✅ Claude (Haiku) analyzed website');
     return parsed;
-
   } catch (err) {
     console.warn('⚠️ Claude analyzer failed, using rule-based fallback:', err.message);
     return extractBasicInfo(pages);
   }
 }
 
-// ─── Main: generatePrompts ───────────────────────────────────────
 export async function generatePrompts(analysis) {
   try {
     const res = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      messages: [{ role: 'user', content: `Generate exactly 16 AI visibility tracking prompts for this website in 4 categories of 4 prompts each. Respond ONLY with valid JSON.\n\nBrand: ${analysis.brand_name}\nNiche: ${analysis.niche}\nServices: ${analysis.services?.join(', ')}\nTarget audience: ${analysis.target_audience}\nCompetitors: ${analysis.competitors?.join(', ')}\nUSP: ${analysis.usp}\n\nCategories:\n1. Niche & core services discovery (no brand name, industry-level)\n2. Brand + service informational (includes brand name)\n3. General niche keywords (broader category, no brand)\n4. Informational + niche + service hybrid (specific use-case questions)\n\nReturn this exact JSON:\n{\n  "prompts": [\n    {"text": "prompt text", "category": 1},\n    ... exactly 16 prompts total, 4 per category\n  ]\n}` }]
+      model: FAST_MODEL,
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `Generate 16 AI visibility prompts (4 per category). JSON only.\n\nBrand:${analysis.brand_name} Niche:${analysis.niche} Services:${analysis.services?.join(',')} Competitors:${analysis.competitors?.join(',')}\n\nCategories: 1=industry discovery (no brand) 2=brand+service 3=general niche 4=use-case hybrid\n\nReturn: {"prompts":[{"text":"...","category":1},... exactly 16]}` }]
+    });
+    const text = res.content[0].text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(text);
+    const prompts = parsed.prompts || [];
+    if (prompts.length === 0) throw new Error('Empty prompts');
+    console.log(`✅ Claude (Haiku) generated ${prompts.length} prompts`);
+    return prompts;
+  } catch (err) {
+    console.warn('⚠️ Claude prompt generation failed, using template fallback:', err.message);
+    return generateTemplatePrompts(analysis);
+  }
+}
+
+export async function analyzeAndGeneratePrompts(pages) {
+  const combined = pages.slice(0, 3).map(p =>
+    `URL: ${p.url}\nTitle: ${p.meta.title}\nDesc: ${p.meta.description}\nH1: ${p.meta.h1s.slice(0,2).join(', ')}\nH2: ${p.meta.h2s.slice(0,4).join(', ')}\nContent: ${p.text.slice(0, 800)}`
+  ).join('\n---\n');
+
+  const fallbackAnalysis = extractBasicInfo(pages);
+
+  const [analysisResult, promptsFromFallback] = await Promise.allSettled([
+    anthropic.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 800,
+      messages: [{ role: 'user', content: `Analyze this website. JSON only, no markdown.\n\n${combined}\n\nReturn: {"brand_name":"string","niche":"string","target_audience":"string","services":["max 6"],"competitors":["max 5"],"geo_signals":["locations"],"usp":"one sentence"}` }]
+    }),
+    anthropic.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `Generate 16 AI visibility prompts (4 per category). JSON only.\n\nBrand:${fallbackAnalysis.brand_name} Niche:${fallbackAnalysis.niche} Services:${fallbackAnalysis.services?.join(',')} Competitors:${fallbackAnalysis.competitors?.join(',')}\n\nCategories: 1=industry discovery (no brand) 2=brand+service 3=general niche 4=use-case hybrid\n\nReturn: {"prompts":[{"text":"...","category":1},... exactly 16]}` }]
+    })
+  ]);
+
+  let analysis = fallbackAnalysis;
+  if (analysisResult.status === 'fulfilled') {
+    try {
+      const text = analysisResult.value.content[0].text.replace(/```json|```/g, '').trim();
+      analysis = JSON.parse(text);
+      console.log('✅ Claude (Haiku) analyzed website [parallel]');
+    } catch {
+      console.warn('⚠️ Analysis parse failed, using rule-based');
+    }
+  }
+
+  let prompts = null;
+  if (promptsFromFallback.status === 'fulfilled') {
+    try {
+      const text = promptsFromFallback.value.content[0].text.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(text);
+      if (parsed.prompts?.length > 0) {
+        prompts = parsed.prompts;
+        console.log(`✅ Claude (Haiku) generated ${prompts.length} prompts [parallel]`);
+      }
+    } catch {}
+  }
+
+  if (!prompts) {
+    try {
+      const res = await anthropic.messages.create({
+        model: FAST_MODEL,
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: `Generate 16 AI visibility prompts (4 per category). JSON only.\n\nBrand:${analysis.brand_name} Niche:${analysis.niche} Services:${analysis.services?.join(',')} Competitors:${analysis.competitors?.join(',')}\n\nCategories: 1=industry discovery (no brand) 2=brand+service 3=general niche 4=use-case hybrid\n\nReturn: {"prompts":[{"text":"...","category":1},... exactly 16]}` }]
+      });
+      const text = res.content[0].text.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(text);
+      prompts = parsed.prompts?.length > 0 ? parsed.prompts : generateTemplatePrompts(analysis);
+    } catch {
+      prompts = generateTemplatePrompts(analysis);
+    }
+  }
+
+  return { analysis, prompts };
+}
+
+// ─── NEW: expandRankingPrompts ────────────────────────────────────
+// Called after a scan completes. Takes prompts where the brand is
+// ranking (tier != absent) and generates targeted variations of those
+// exact winning prompts — so future scans focus on proven keywords.
+export async function expandRankingPrompts(rankingPrompts, analysis) {
+  if (!rankingPrompts || rankingPrompts.length === 0) {
+    console.log('ℹ️ No ranking prompts to expand');
+    return [];
+  }
+
+  // Build a compact summary: prompt text + best tier + which platforms
+  const ranked = rankingPrompts.map(p => ({
+    text: p.text,
+    tier: p.best_tier,        // primary / top / mentioned / buried
+    platforms: p.platforms    // e.g. ['chatgpt', 'gemini']
+  }));
+
+  try {
+    const res = await anthropic.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 1200,
+      messages: [{
+        role: 'user',
+        content: `You are an AI visibility keyword strategist.
+
+This brand is already ranking on these prompts in AI platforms:
+${JSON.stringify(ranked, null, 2)}
+
+Brand: ${analysis.brand_name}
+Niche: ${analysis.niche}
+Services: ${analysis.services?.join(', ')}
+
+Generate 8-12 NEW prompt variations that are closely related to the winning prompts above.
+Goal: find more specific, long-tail versions of these winning keywords where the brand is likely to also rank.
+Rules:
+- Each new prompt must be a natural question or search query a user would actually type
+- Build on the themes of the ranking prompts — don't invent new unrelated topics
+- Mix question formats (what is, how to, best, compare, which, who offers)
+- Do NOT repeat any of the input prompts
+- Assign category: 1=discovery 2=brand 3=general 4=use-case
+
+JSON only:
+{"prompts":[{"text":"...","category":1,"based_on":"original prompt it expands"}]}`
+      }]
     });
 
     const text = res.content[0].text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(text);
     const prompts = parsed.prompts || [];
-    if (prompts.length === 0) throw new Error('Empty prompts returned');
-    console.log(`✅ Claude generated ${prompts.length} prompts`);
+    console.log(`✅ Expanded ${rankingPrompts.length} ranking prompts → ${prompts.length} new targeted prompts`);
     return prompts;
 
   } catch (err) {
-    console.warn('⚠️ Claude prompt generation failed, using template fallback:', err.message);
-    const fallback = generateTemplatePrompts(analysis);
-    console.log(`✅ Template fallback generated ${fallback.length} prompts`);
-    return fallback;
+    console.warn('⚠️ expandRankingPrompts failed:', err.message);
+    return [];
   }
 }
 
-// ─── Main: generateRecommendations ──────────────────────────────
 export async function generateRecommendations(promptScores, analysis) {
-const summary = JSON.stringify(promptScores.slice(0, 10).map(s => ({
-  prompt: s.prompt_text?.slice(0, 50),
-  platform: s.platform,
-  score: Math.round(s.avg_rank_score || 0),
-  tier: s.best_rank_tier
-})));
+  const summary = JSON.stringify(promptScores.slice(0, 10).map(s => ({
+    prompt: s.prompt_text?.slice(0, 50),
+    platform: s.platform,
+    score: Math.round(s.avg_rank_score || 0),
+    tier: s.best_rank_tier
+  })));
 
   try {
     const res = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: `Based on these AI visibility check results, generate 4-6 actionable GEO recommendations. Respond ONLY with valid JSON.\n\nBrand: ${analysis.brand_name}\nNiche: ${analysis.niche}\nResults: ${summary}\n\nReturn this JSON:\n{\n  "recommendations": [\n    {\n      "type": "warn|info|good",\n      "title": "short action title",\n      "description": "2-3 sentence explanation with specific action",\n      "priority": 1-10\n    }\n  ]\n}` }]
+      model: FAST_MODEL,
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `Based on these AI visibility results, give 4-6 actionable GEO recommendations. JSON only.\n\nBrand:${analysis.brand_name} Niche:${analysis.niche}\nResults:${summary}\n\nReturn: {"recommendations":[{"type":"warn|info|good","title":"short title","description":"2-3 sentences","priority":1-10}]}` }]
     });
-
     const text = res.content[0].text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(text);
     const recs = parsed.recommendations || [];
     if (recs.length === 0) throw new Error('Empty recommendations');
-    console.log(`✅ Claude generated ${recs.length} recommendations`);
+    console.log(`✅ Claude (Haiku) generated ${recs.length} recommendations`);
     return recs;
-
   } catch (err) {
     console.warn('⚠️ Claude recommendations failed, using rule-based fallback:', err.message);
     return generateRuleBasedRecommendations(promptScores, analysis);
