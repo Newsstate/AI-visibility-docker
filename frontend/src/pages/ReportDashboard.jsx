@@ -277,8 +277,10 @@ export default function ReportDashboard() {
   const {
     project, run, metrics,
     platformScores,
-    sentimentByPlatform = [],  // safe default if backend not updated yet
+    sentimentByPlatform = [],
     promptResults,
+    rankingPrompts  = [],
+    absentPrompts   = [],
     clicksByPlatform, clickJourney, scoreHistory, recommendations
   } = data;
 
@@ -348,8 +350,14 @@ export default function ReportDashboard() {
             <div className="metric-card">
               <div className="text-xs text-gray-500 mb-1">Prompts tracked</div>
               <div className="text-2xl font-medium text-gray-900">{metrics.promptsTracked}</div>
-              <div className="text-xs mt-1 text-gray-400">
-                {promptResults.filter(p=>p.source==='auto').length} auto · {promptResults.filter(p=>p.source==='manual').length} manual
+              <div className="text-xs mt-1 flex items-center gap-1.5">
+                <span className="flex items-center gap-0.5" style={{color:'#0F6E56'}}>
+                  <i className="ti ti-circle-check-filled text-[10px]" />{metrics.promptsRanking ?? rankingPrompts.length} ranking
+                </span>
+                <span style={{color:'#b4b2a9'}}>·</span>
+                <span className="flex items-center gap-0.5" style={{color:'#b4b2a9'}}>
+                  <i className="ti ti-circle-x text-[10px]" />{metrics.promptsAbsent ?? absentPrompts.length} absent
+                </span>
               </div>
             </div>
             <div className="metric-card">
@@ -512,6 +520,87 @@ export default function ReportDashboard() {
             Based on mention frequency across all AI responses. Competitor percentages are estimated.
           </p>
         </div>
+
+        {/* ── Winning Keywords ─────────────────────────────────────── */}
+        {rankingPrompts.length > 0 && (
+          <div className="card">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <i className="ti ti-trophy text-sm" style={{color:'#0F6E56'}} />
+                <p className="section-label" style={{marginBottom:0}}>Winning keywords</p>
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{background:'#E1F5EE',color:'#0F6E56'}}>
+                  {rankingPrompts.length} ranking
+                </span>
+              </div>
+              <span className="text-xs text-gray-400">Prompts where your brand appears in AI responses · Variants auto-added for next scan</span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-1.5">
+              {rankingPrompts.map(rp => {
+                const tierCfg = TIER_CONFIG[rp.best_tier] || TIER_CONFIG.absent;
+                const rankingPlats = (rp.ranking_platforms || []);
+                return (
+                  <div key={rp.id}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg"
+                    style={{background:'#fafaf7', border:'0.5px solid #ebe9e1'}}>
+
+                    {/* Tier badge */}
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize flex-shrink-0"
+                      style={{background:tierCfg.bg, color:tierCfg.color}}>
+                      {rp.best_tier}
+                    </span>
+
+                    {/* Prompt text */}
+                    <span className="flex-1 text-xs text-gray-800 leading-relaxed">{rp.text}</span>
+
+                    {/* Platform dots */}
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {rankingPlats.map(plat => {
+                        const pm = PLATFORM_META[plat];
+                        if (!pm) return null;
+                        return (
+                          <span key={plat} title={pm.label}
+                            className="flex items-center justify-center w-5 h-5 rounded-full text-[10px]"
+                            style={{background:pm.color+'22', color:pm.color}}>
+                            <i className={`ti ${pm.icon}`} />
+                          </span>
+                        );
+                      })}
+                    </div>
+
+                    {/* Score */}
+                    <span className="text-xs font-medium flex-shrink-0 w-8 text-right" style={{color:'#5f5e5a'}}>
+                      {Math.round(rp.best_score ?? 0)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {absentPrompts.length > 0 && (
+              <div className="mt-3 pt-3 border-t" style={{borderTopWidth:'0.5px',borderColor:'#ebe9e1'}}>
+                <div className="flex items-center gap-2 mb-2">
+                  <i className="ti ti-eye-off text-xs" style={{color:'#b4b2a9'}} />
+                  <span className="text-[11px] font-medium" style={{color:'#b4b2a9'}}>Not ranking yet ({absentPrompts.length})</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {absentPrompts.slice(0, 8).map(ap => (
+                    <span key={ap.id}
+                      className="text-[10px] px-2 py-1 rounded-full"
+                      style={{background:'#f1efe8', color:'#9c9a93'}}>
+                      {ap.text}
+                    </span>
+                  ))}
+                  {absentPrompts.length > 8 && (
+                    <span className="text-[10px] px-2 py-1 rounded-full" style={{background:'#f1efe8',color:'#9c9a93'}}>
+                      +{absentPrompts.length - 8} more
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Prompt analysis table with expandable snippets */}
         <div className="card">
