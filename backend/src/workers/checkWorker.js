@@ -6,23 +6,18 @@ import { Worker, Queue, QueueEvents } from 'bullmq';
 import Redis from 'ioredis';
 import { query } from '../db/pool.js';
 import { checkPlatform, scoreResponse, PLATFORMS, RUNS_PER_PROMPT } from '../services/platformChecker.js';
-import { generateRecommendations } from '../services/analyzer.js';
+import { generateRecommendations, expandRankingPrompts } from '../services/analyzer.js';
 
-// ─── Fix: use REDIS_PUBLIC to avoid Railway overriding REDIS_URL ─
 const REDIS_URL = process.env.REDIS_PUBLIC || process.env.REDIS_URL || 'redis://localhost:6379';
-
 const connection = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
 const pubClient  = new Redis(REDIS_URL);
 
-// Handle Redis connection errors gracefully
 connection.on('error', err => console.error('Redis connection error:', err.message));
 pubClient.on('error',  err => console.error('Redis pubClient error:', err.message));
 
-// ─── Queue definitions ────────────────────────────────────────────
 export const checkQueue       = new Queue('visibility-checks', { connection });
 export const checkQueueEvents = new QueueEvents('visibility-checks', { connection });
 
-// ─── GEO Score calculator ─────────────────────────────────────────
 function calcGeoScore(platformScores) {
   const weights = { chatgpt:0.25, perplexity:0.25, gemini:0.20, claude:0.15, ai_overview:0.15 };
   let total = 0, weightSum = 0;
@@ -34,7 +29,6 @@ function calcGeoScore(platformScores) {
   return Math.round((total / weightSum) * 100) / 100;
 }
 
-// ─── Batch DB insert helper ───────────────────────────────────────
 async function batchInsertResults(rows) {
   if (!rows.length) return;
   const values = rows.map((_, i) => {
@@ -52,7 +46,6 @@ async function batchInsertResults(rows) {
   `, params);
 }
 
-// ─── Worker ──────────────────────────────────────────────────────
 export const checkWorker = new Worker('visibility-checks', async (job) => {
   const { checkRunId, projectId, selectedPlatforms } = job.data;
 
@@ -63,7 +56,6 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
     `SELECT * FROM prompts WHERE project_id=$1 AND is_active=true`, [projectId]
   );
 
-  // Use selected platforms or fall back to all
   const activePlatforms = (selectedPlatforms?.length > 0)
     ? PLATFORMS.filter(p => selectedPlatforms.includes(p))
     : PLATFORMS;
@@ -74,49 +66,48 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
   let completedQueries = 0;
   const platformTotals = {};
   const resultBatch    = [];
-
-  // ─── Process prompts in parallel batches of 4 ────────────────
-  const BATCH_SIZE = 4;
+  const BATCH_SIZE     = parseInt(process.env.PROMPT_BATCH_SIZE) || 6;
 
   for (let i = 0; i < prompts.length; i += BATCH_SIZE) {
     const batch = prompts.slice(i, i + BATCH_SIZE);
 
-    // All prompts in batch run simultaneously
     await Promise.all(batch.map(async (prompt) => {
-
-      // All platforms run simultaneously per prompt
       await Promise.all(activePlatforms.map(async (platform) => {
         const runScores = [];
 
-        // Runs are sequential per platform (avoids burst rate limits)
-        for (let run = 1; run <= RUNS_PER_PROMPT; run++) {
-          try {
-            const response = await checkPlatform(platform, prompt.text);
-            const scored   = scoreResponse(
-              response || '',
-              project.brand_name || project.domain,
-              project.domain
-            );
+        const runResults = await Promise.allSettled(
+          Array.from({ length: RUNS_PER_PROMPT }, (_, idx) =>
+            checkPlatform(platform, prompt.text).then(response => ({ response, run: idx + 1 }))
+          )
+        );
 
-            // Collect for batch insert instead of individual writes
-            resultBatch.push({
-              checkRunId, promptId: prompt.id, platform,
-              tier:      scored.tier,
-              score:     scored.score,
-              sentiment: scored.sentiment,
-              snippet:   scored.snippet?.slice(0, 500) || null,
-              mentioned: scored.mentioned,
-              runIndex:  run
-            });
-
-            runScores.push(scored);
-          } catch (err) {
-            console.error(`Check failed: ${platform} / ${prompt.text.slice(0,40)}`, err.message);
+        for (const result of runResults) {
+          if (result.status === 'rejected') {
+            console.error(`Check failed: ${platform} / ${prompt.text.slice(0,40)}`, result.reason?.message);
+            completedQueries++;
+            continue;
           }
 
+          const { response, run } = result.value;
+          const scored = scoreResponse(
+            response || '',
+            project.brand_name || project.domain,
+            project.domain
+          );
+
+          resultBatch.push({
+            checkRunId, promptId: prompt.id, platform,
+            tier:      scored.tier,
+            score:     scored.score,
+            sentiment: scored.sentiment,
+            snippet:   scored.snippet?.slice(0, 500) || null,
+            mentioned: scored.mentioned,
+            runIndex:  run
+          });
+
+          runScores.push(scored);
           completedQueries++;
 
-          // Update DB every 10 queries instead of every 1
           if (completedQueries % 10 === 0 || completedQueries === totalQueries) {
             await query(
               `UPDATE check_runs SET completed_queries=$1 WHERE id=$2`,
@@ -124,7 +115,6 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
             );
           }
 
-          // Publish live progress to SSE (every query for smooth UI)
           try {
             await pubClient.publish(`check:${checkRunId}`, JSON.stringify({
               type:       'progress',
@@ -132,15 +122,13 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
               total:      totalQueries,
               platform,
               promptText: prompt.text.slice(0, 60),
-              tier:       runScores[runScores.length - 1]?.tier || 'absent'
+              tier:       scored.tier || 'absent'
             }));
           } catch (pubErr) {
-            // Don't crash if Redis pub fails — just log and continue
             console.warn('Redis publish failed:', pubErr.message);
           }
-        } // run loop
+        }
 
-        // Aggregate scores after all runs for this platform
         const mentions       = runScores.filter(r => r.mentioned).length;
         const avgScore       = runScores.length > 0
           ? runScores.reduce((s, r) => s + r.score, 0) / runScores.length : 0;
@@ -158,11 +146,9 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
 
         if (!platformTotals[platform]) platformTotals[platform] = [];
         platformTotals[platform].push(avgScore);
+      }));
+    }));
 
-      })); // platform parallel
-    })); // prompt batch parallel
-
-    // Batch insert all raw results collected in this batch
     if (resultBatch.length > 0) {
       try {
         await batchInsertResults([...resultBatch]);
@@ -172,7 +158,7 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
         resultBatch.length = 0;
       }
     }
-  } // batch loop
+  }
 
   // ─── Final GEO scoring ────────────────────────────────────────
   const platformAverages = {};
@@ -181,7 +167,7 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
   }
   const geoScore = calcGeoScore(platformAverages);
 
-  // ─── AI Recommendations ───────────────────────────────────────
+  // ─── Aggregate scores for post-scan analysis ──────────────────
   const { rows: scores } = await query(`
     SELECT ps.*, p.text as prompt_text, p.category
     FROM prompt_scores ps
@@ -190,6 +176,7 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
     ORDER BY ps.avg_rank_score DESC
   `, [checkRunId]);
 
+  // ─── AI Recommendations ───────────────────────────────────────
   try {
     const recs = await generateRecommendations(scores, {
       brand_name: project.brand_name,
@@ -204,6 +191,68 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
     }
   } catch {}
 
+  // ─── NEW: Expand ranking prompts after scan ───────────────────
+  // Find prompts where brand is ranking (not absent) across any platform.
+  // Group by prompt, pick the best tier seen across all platforms.
+  try {
+    const tierRank = { primary: 4, top: 3, mentioned: 2, buried: 1, absent: 0 };
+
+    // Aggregate per prompt: best tier + which platforms it ranked on
+    const promptMap = {};
+    for (const row of scores) {
+      if (row.best_rank_tier === 'absent') continue;
+      if (!promptMap[row.prompt_id]) {
+        promptMap[row.prompt_id] = {
+          id:        row.prompt_id,
+          text:      row.prompt_text,
+          best_tier: row.best_rank_tier,
+          platforms: []
+        };
+      }
+      const entry = promptMap[row.prompt_id];
+      entry.platforms.push(row.platform);
+      // Keep the highest-tier seen
+      if ((tierRank[row.best_rank_tier] || 0) > (tierRank[entry.best_tier] || 0)) {
+        entry.best_tier = row.best_rank_tier;
+      }
+    }
+
+    const rankingPrompts = Object.values(promptMap);
+    console.log(`🎯 Found ${rankingPrompts.length} ranking prompts — expanding...`);
+
+    if (rankingPrompts.length > 0) {
+      const expanded = await expandRankingPrompts(rankingPrompts, {
+        brand_name: project.brand_name,
+        niche:      project.niche,
+        services:   project.services
+      });
+
+      // Get existing prompt texts to avoid duplicates
+      const { rows: existingPrompts } = await query(
+        `SELECT text FROM prompts WHERE project_id=$1`, [projectId]
+      );
+      const existingTexts = new Set(existingPrompts.map(p => p.text.toLowerCase().trim()));
+
+      // Insert new expanded prompts that don't already exist
+      let added = 0;
+      for (const p of expanded) {
+        const normalised = p.text.toLowerCase().trim();
+        if (!normalised || existingTexts.has(normalised)) continue;
+
+        await query(
+          `INSERT INTO prompts (project_id, text, category, source) VALUES ($1,$2,$3,'auto')`,
+          [projectId, p.text.trim(), p.category || null]
+        );
+        existingTexts.add(normalised); // prevent dupes within the batch
+        added++;
+      }
+      console.log(`✅ Added ${added} new targeted prompts from ranking expansion`);
+    }
+  } catch (err) {
+    // Non-fatal — don't fail the whole run
+    console.warn('⚠️ Ranking prompt expansion failed:', err.message);
+  }
+
   // ─── Mark complete ────────────────────────────────────────────
   await query(`
     UPDATE check_runs SET status='completed', completed_at=NOW(), geo_score=$1 WHERE id=$2
@@ -213,7 +262,7 @@ export const checkWorker = new Worker('visibility-checks', async (job) => {
 
   return { geoScore, totalQueries, completedQueries };
 
-}, { connection, concurrency: 3 });
+}, { connection, concurrency: parseInt(process.env.WORKER_CONCURRENCY) || 5 });
 
 checkWorker.on('completed', (job, result) => {
   console.log(`✅ Check run ${job.data.checkRunId} done. GEO score: ${result.geoScore}`);
